@@ -14,16 +14,16 @@ The pack still has five structural weaknesses that reduce bounty yield:
 
 ## Workflow-by-workflow findings
 
-| Original workflow | Strong points | Main defects | v2 disposition |
-|---|---|---|---|
-| External Flow Analysis | Good entrypoint -> flow -> hypothesis -> verification chain | No scope/architecture contract, no dedup, no actual PoC, no ranking, single hypothesis run | Replaced by end-to-end evidence pipeline v2 |
-| Cosmos ABCI Panic Halt | Strong ABCI enumeration and panic-class fan-out | Panic agents report directly; no independent verifier, PoC, dedup, program gate, consensus-wide effect proof | Rebuilt as consensus halt review v2 |
-| Authorization & Business Logic | Good actor/resource/invariant model and hostile verification | No scope gate, dedup, PoC, ranking; one hypothesis lens mixes identity and workflow attacks | Rebuilt with two fresh-context hypothesis branches |
-| Immunefi Web-App Evidence Gate | Best original workflow; good provenance, dedup, technical/program separation | Program scope is applied late; ENS-specific logic leaks into a general web workflow; PoC remains a plan; no relative ranking | Generalized and expanded as web evidence/program gate v2 |
-| DeFi Permissionless Economic Abuse | Useful broad money-flow and arithmetic tracing | Overlaps with hardened v2, lacks dedup, PoC, program gate, ranking | Superseded by DeFi pipeline v3 |
-| DeFi Economic Abuse v2 Hardened | Valuable fund provenance and refutation gates | Gates are Pendle-specific and sometimes classify instead of verify; "any gate fails" mishandles not-applicable gates; no scope/PoC/dedup/ranking | Generalized into evidence-based nine-gate verification |
-| Pooled-TVL Theft | Correctly focuses on custody and conservation | Hard-coded contract list and old census; hard-coded 1% severity rule; assumes audited math is safe; no independent executable PoC step | Rebuilt to derive custody and thresholds from current evidence |
-| Pendle Tokenomics Theft | Good tokenomics invariants and claim/replay coverage | Hard-coded exclusions and "already exhausted" claims; profit-only support can discard accepted freeze/governance impacts; no scope/PoC/dedup/ranking | Rebuilt as generic tokenomics value hunt v2 |
+| Original workflow                  | Strong points                                                                | Main defects                                                                                                                                         | v2 disposition                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| External Flow Analysis             | Good entrypoint -> flow -> hypothesis -> verification chain                  | No scope/architecture contract, no dedup, no actual PoC, no ranking, single hypothesis run                                                           | Replaced by end-to-end evidence pipeline v2                    |
+| Cosmos ABCI Panic Halt             | Strong ABCI enumeration and panic-class fan-out                              | Panic agents report directly; no independent verifier, PoC, dedup, program gate, consensus-wide effect proof                                         | Rebuilt as consensus halt review v2                            |
+| Authorization & Business Logic     | Good actor/resource/invariant model and hostile verification                 | No scope gate, dedup, PoC, ranking; one hypothesis lens mixes identity and workflow attacks                                                          | Rebuilt with two fresh-context hypothesis branches             |
+| Immunefi Web-App Evidence Gate     | Best original workflow; good provenance, dedup, technical/program separation | Program scope is applied late; ENS-specific logic leaks into a general web workflow; PoC remains a plan; no relative ranking                         | Generalized and expanded as web evidence/program gate v2       |
+| DeFi Permissionless Economic Abuse | Useful broad money-flow and arithmetic tracing                               | Overlaps with hardened v2, lacks dedup, PoC, program gate, ranking                                                                                   | Superseded by DeFi pipeline v3                                 |
+| DeFi Economic Abuse v2 Hardened    | Valuable fund provenance and refutation gates                                | Gates are Pendle-specific and sometimes classify instead of verify; "any gate fails" mishandles not-applicable gates; no scope/PoC/dedup/ranking     | Generalized into evidence-based nine-gate verification         |
+| Pooled-TVL Theft                   | Correctly focuses on custody and conservation                                | Hard-coded contract list and old census; hard-coded 1% severity rule; assumes audited math is safe; no independent executable PoC step               | Rebuilt to derive custody and thresholds from current evidence |
+| Pendle Tokenomics Theft            | Good tokenomics invariants and claim/replay coverage                         | Hard-coded exclusions and "already exhausted" claims; profit-only support can discard accepted freeze/governance impacts; no scope/PoC/dedup/ranking | Rebuilt as generic tokenomics value hunt v2                    |
 
 ## Material design changes
 
@@ -90,10 +90,9 @@ The v2 workflows expect current program text, deployment evidence, known issues,
 - `_all_workflows_v2.json`
 - `README.md`
 
-
 ## v2.1 import-valid correction
 
-The initial v2 architecture was retained, but its serialization violated the engine's global output-key uniqueness and consume-all context rules. v2.1 introduced stage-specific output keys and one dedup boundary. The current portable v2.2 serialization additionally matches OpenKritt's official workflow-file contract:
+The initial v2 architecture was retained, but its serialization violated the engine's global output-key uniqueness and consume-all context rules. v2.1 introduced stage-specific output keys and one dedup boundary. The v2.2 serialization then matched OpenKritt's official workflow-file contract:
 
 - every intermediate depth has a unique semantic stage prefix (`scope_`, `surface_`, `hyp_`, `dedup_`, `verify_`, `poc_`, `program_`);
 - workflow files use the `open-kritt-workflow` version 2 envelope;
@@ -104,18 +103,31 @@ The initial v2 architecture was retained, but its serialization violated the eng
 - `file_path` and `line` are reserved for the final finding schema;
 - bare testing constraints now reference `extra.authorized_test_constraints`;
 - mapping prompts require deterministic ripgrep/AST/compiler enumeration and two passes by default;
-- PoC construction runs only for `dedup_triage_priority=high` candidates;
+- v2.2 PoC construction ran only for `dedup_triage_priority=high` candidates; v2.3 removes that lossy heuristic gate;
 - `fork_rpc_url`, `fork_block`, and `repeat_runs` are explicit workflow extras.
 
 All seven workflows pass `frontend/src/lib/workflowTransfer.js` parsing and
-`backend/src/lib/validation.js` validation from this OpenKritt checkout. The checks
-cover output-key uniqueness, reference availability across the consume-all boundary,
-derived extras, sibling schemas, one dedup consume-all depth, sequential depths, and
-the terminal finding contract.
-
+`backend/src/lib/validation.js` validation from this OpenKritt checkout. Version 2.3
+retains the import contract, derived extras, sibling schemas, sequential depths, and
+terminal finding contract without the internal consume-all boundary.
 
 ## v2.2 Web3 expansion
 
 The DeFi, pooled-value, and tokenomics workflows now map transparent/UUPS/beacon/diamond/clone/delegatecall deployment paths, initializer and upgrade authorization, selector routing, and storage layout across evidenced versions. Their second hypothesis lens explicitly covers takeover, initialization replay, storage collision, selector clash, delegatecall target control, and proxy/implementation authorization disagreement.
 
 Each mapped operation also carries a two-hop local cross-contract neighborhood with related public operations and shared state. This lets the existing per-operation composition agent construct multi-contract exploit sequences without adding a second `consumeAll` boundary. Engine-level fresh-context repetition remains a scan configuration choice and is documented separately from the mapping agent's internal deterministic passes.
+
+## v2.3 progressive execution correction
+
+Comparison with the built-in OpenKritt workflows exposed a throughput regression in
+the v2.2 pack. Built-in and previously successful custom workflows fan out work and
+place a multi-output reporting step near the end of each independent branch. The v2.2
+pack instead converged every hypothesis into one global dedup job and added four serial
+depths before any row could enter `workflows.vulnerabilities`.
+
+Version 2.3 removes that internal convergence point, combines hostile verification and
+safe reproduction into one per-candidate job, and combines the program gate with final
+emission. This preserves immutable scope extraction, dual hypothesis lenses, production
+reachability, falsification, safe PoC evidence, and exact program matching while letting
+final rows appear progressively as independent branches finish. The engine's existing
+post-processing remains the single global deduplication and ranking layer.
