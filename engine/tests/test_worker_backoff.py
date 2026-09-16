@@ -409,6 +409,29 @@ class _StorageDatabase:
         return True
 
 
+class _ScanStatusDatabase:
+    def __init__(self, status):
+        self.status = status
+
+    @contextmanager
+    def connect(self):
+        yield _Connection()
+
+    def load_scan(self, _conn, scan_id):
+        return {"id": scan_id, "status": self.status} if self.status is not None else None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("running", True), ("stopped", False), ("failed", False), (None, False)],
+)
+def test_worker_does_not_launch_retry_for_non_runnable_scan(status, expected):
+    worker = Worker.__new__(Worker)
+    worker.db = _ScanStatusDatabase(status)
+
+    assert worker._scan_accepts_new_harness_attempt(58) is expected
+
+
 def test_worker_blocks_new_scan_containers_below_storage_floor(monkeypatch):
     database = _StorageDatabase()
     worker = Worker.__new__(Worker)

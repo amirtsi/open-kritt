@@ -1122,6 +1122,13 @@ class Worker:
                 )
         return not blocked
 
+    def _scan_accepts_new_harness_attempt(self, scan_id: int) -> bool:
+        """Return whether a retry may launch another model container."""
+
+        with self.db.connect() as conn:
+            scan = self.db.load_scan(conn, scan_id)
+        return bool(scan and scan["status"] not in NON_RUNNABLE_SCAN_STATUSES)
+
     def _scheduler_state(self) -> threading.Lock:
         if not hasattr(self, "_scan_scheduler_lock"):
             self._scan_scheduler_lock = threading.Lock()
@@ -1611,6 +1618,19 @@ class Worker:
                 codex_session_id = None
                 result = None
                 try:
+                    if not self._scan_accepts_new_harness_attempt(int(scan["id"])):
+                        with self.db.connect() as conn:
+                            self.db.update_metadata(
+                                conn,
+                                metadata_id,
+                                status="stopped",
+                                error="scan stopped before the next harness attempt",
+                                run_time_ms=int((now_utc() - started).total_seconds() * 1000),
+                                raw_token_usage=None,
+                                phase="interrupted",
+                            )
+                            conn.commit()
+                        return True
                     if not self._new_scan_container_allowed(int(scan["id"])):
                         with self.db.connect() as conn:
                             self.db.update_metadata(
