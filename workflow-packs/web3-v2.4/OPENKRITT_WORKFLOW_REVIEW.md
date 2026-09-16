@@ -103,19 +103,19 @@ The initial v2 architecture was retained, but its serialization violated the eng
 - `file_path` and `line` are reserved for the final finding schema;
 - bare testing constraints now reference `extra.authorized_test_constraints`;
 - mapping prompts require deterministic ripgrep/AST/compiler enumeration and two passes by default;
-- v2.2 PoC construction ran only for `dedup_triage_priority=high` candidates; v2.3 removes that lossy heuristic gate;
+- v2.2 PoC construction ran only for `dedup_triage_priority=high` candidates; v2.4 keeps priority advisory and verifies every distinct code-grounded candidate;
 - `fork_rpc_url`, `fork_block`, and `repeat_runs` are explicit workflow extras.
 
 All seven workflows pass `frontend/src/lib/workflowTransfer.js` parsing and
-`backend/src/lib/validation.js` validation from this OpenKritt checkout. Version 2.3
+`backend/src/lib/validation.js` validation from this OpenKritt checkout. Version 2.4
 retains the import contract, derived extras, sibling schemas, sequential depths, and
-terminal finding contract without the internal consume-all boundary.
+terminal finding contract with exactly one pre-verification consume-all boundary.
 
 ## v2.2 Web3 expansion
 
 The DeFi, pooled-value, and tokenomics workflows now map transparent/UUPS/beacon/diamond/clone/delegatecall deployment paths, initializer and upgrade authorization, selector routing, and storage layout across evidenced versions. Their second hypothesis lens explicitly covers takeover, initialization replay, storage collision, selector clash, delegatecall target control, and proxy/implementation authorization disagreement.
 
-Each mapped operation also carries a two-hop local cross-contract neighborhood with related public operations and shared state. This lets the existing per-operation composition agent construct multi-contract exploit sequences without adding a second `consumeAll` boundary. Engine-level fresh-context repetition remains a scan configuration choice and is documented separately from the mapping agent's internal deterministic passes.
+Each mapped operation also carries a two-hop local cross-contract neighborhood with related public operations and shared state. This lets the existing per-operation composition agent construct multi-contract exploit sequences before the single deduplication boundary. Engine-level fresh-context repetition remains a scan configuration choice and is documented separately from the mapping agent's internal deterministic passes.
 
 ## v2.3 progressive execution correction
 
@@ -131,3 +131,19 @@ emission. This preserves immutable scope extraction, dual hypothesis lenses, pro
 reachability, falsification, safe PoC evidence, and exact program matching while letting
 final rows appear progressively as independent branches finish. The engine's existing
 post-processing remains the single global deduplication and ranking layer.
+
+## v2.4 coverage-before-verification correction
+
+Observed v2.3 scans exposed a second-order effect of the engine's depth-first queue:
+as soon as one hypothesis branch emitted a row, its verification job outranked the
+remaining sibling hypothesis jobs. A provider safety block or runner failure could
+therefore fail the scan after only a small fraction of the attack surface had been
+explored.
+
+Version 2.4 restores one `consumesAll` root-cause consolidation boundary immediately
+before verification. The boundary has two jobs: guarantee that every sibling
+hypothesis branch completed, and merge only true root-cause duplicates before
+repository-backed verification. Unlike v2.2, triage priority cannot suppress a
+candidate, verification and safe reproduction remain combined, and the program gate
+still emits each canonical candidate independently. Final finding deduplication and
+ranking remain in OpenKritt post-processing.
