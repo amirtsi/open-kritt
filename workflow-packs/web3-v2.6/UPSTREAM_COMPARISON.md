@@ -16,7 +16,7 @@ runtime budget are imperfect.
 | Upstream `Cosmos ABCI Panic Halt Review` | 2 | 5 | 0 | 20 | Per ABCI method at depth 1 |
 | Downstream broad v2.4 | 8 | 9 | 1 | 119 | After dedup, verification, reproduction, and program gate |
 | Downstream focused v2.4 workflows | 6-8 | 7-9 | 1 | 104-134 | After the same precision pipeline |
-| Recall-first v2.6 | 3 | 5 | 0 | 32 | Three independent per-flow lenses at depth 2 |
+| Recall-first v2.6 | 3 | 3 | 0 | 24 | Per flow at depth 2; configuration matches upstream |
 
 The schema-field count is a proxy for how much structured context each branch must
 carry, not a quality score. The important difference is that upstream and v2.6 do not
@@ -59,11 +59,13 @@ that was absent from the workspace and returned empty stubs. This run cannot sup
 ## v2.6 decision
 
 The first correction is one benchmarkable recall workflow, not another seven-workflow
-rewrite. v2.6 keeps upstream's three-depth topology and adds three independent final
-lenses that cover protocol-state bypasses, parser/crash boundaries, and
-accounting/consensus invariants. It emits concrete technical candidates before
-deduplication, PoC, severity, or program eligibility. Those later stages can reject or
-rank a stored candidate without erasing evidence that discovery found it.
+rewrite. v2.6 exactly preserves upstream's depths, step count, fan-out flags,
+consume-all flags, and output schemas. It changes only the three prompt methods. The
+single final investigation applies a fixed matrix covering protocol-state bypasses,
+parser/crash boundaries, and accounting/consensus invariants, then emits concrete
+technical candidates before deduplication, PoC, severity, or program eligibility.
+Those later stages can reject or rank a stored candidate without erasing evidence that
+discovery found it.
 
 After a known historical code snapshot is available, compare upstream, v2.4, and v2.6
 blindly with identical model, source tree, configuration, and repetition count. Measure

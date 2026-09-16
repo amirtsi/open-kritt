@@ -1,8 +1,9 @@
 # OpenKritt Recall-First Workflow Pack v2.6
 
-This pack restores the short branch-preserving shape of upstream
-`external-flow-analysis`: external surfaces -> distinct flows -> findings. It is
-intended for benchmark recall and the first discovery pass of an authorized review.
+This pack uses the exact execution configuration and output contracts of upstream
+`external-flow-analysis`: external surfaces -> distinct flows -> findings. Only the
+three prompt methods are refined. This makes it suitable for a controlled recall
+benchmark and the first discovery pass of an authorized review.
 
 ## Why this exists
 
@@ -21,12 +22,13 @@ verification run.
 1. Map every externally influenced production surface.
 2. Trace each materially distinct flow, state transition, invariant, and alternate
    sequence.
-3. Run three independent adversarial lenses on every flow:
-   identity/protocol state; parsing/crash boundaries; and accounting/consensus.
+3. Investigate every flow once using a fixed adversarial invariant matrix covering
+   identity, protocol state, parsing, crash boundaries, and cross-component invariants.
 
-There is no consume-all boundary and no early scope or PoC gate. All three levels use
-multi-output fan-out. The terminal schema is OpenKritt's standard nine-field finding
-contract.
+As in upstream, there are exactly three depths and one step at each depth. There is no
+consume-all boundary or early scope/PoC gate. All three levels use multi-output fan-out,
+and every output schema is identical to upstream. The controlled variable is prompt
+method quality.
 
 ## Run requirements
 
