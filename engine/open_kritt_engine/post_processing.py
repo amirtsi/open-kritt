@@ -13,9 +13,10 @@ from .harnesses import (
     harness_failure_retry_count,
     normalize_harness_name,
 )
+from .impact_gate import evaluate_readiness, evidence_block, investigation_settings, lifecycle_block, lifecycle_status
 from .model_output_artifacts import record_model_error_output
 from .models import post_processing_model_selection, supplemental_post_script_model_selection
-from .poc_artifacts import finalize_poc_result
+from .poc_artifacts import capture_evidence
 from .prompting import (
     append_schema_prompt,
     harness_prompt,
@@ -27,8 +28,15 @@ from .prompting import (
     scan_revision,
 )
 from .runtime_config import runtime_int
-from .schema import EXTRACTOR_HELPER_FIELD, OutputValidationError, output_schema, validate_payload
-from .v27_pipeline import enforce_report_readiness, pipeline_ids, preceding_results, prior_results, stage_for_script
+from .schema import EXTRACTOR_HELPER_FIELD, OutputValidationError, output_schema, strip_reserved_keys, validate_payload
+from .v27_pipeline import (
+    d4_eligibility_sql,
+    d5_eligibility_sql,
+    pipeline_ids,
+    preceding_results,
+    prior_results,
+    stage_for_script,
+)
 from .workspace import (
     cleanup_job_workspace,
     cleanup_workspace,
@@ -460,6 +468,8 @@ class PostProcessor:
         self.config = config
         self.db = db
         self.workspace_setup_slots = workspace_setup_slots
+        # Evidence captured from the isolated D4 workspace, keyed by metadata id, consumed once persisted.
+        self._evidence_captures: dict[int, dict[str, Any]] = {}
 
     def process_once(self, scan: dict[str, Any], harness) -> bool:
         scan_id = _int(scan["id"])
@@ -755,8 +765,8 @@ class PostProcessor:
                     validator(result.payload)
                     if kind == "v27_poc" and poc_finding_id is not None:
                         poc_rows = result.payload.get("results") or []
-                        if poc_rows:
-                            finalize_poc_result(
+                        if poc_rows and isinstance(poc_rows[0], dict):
+                            capture = capture_evidence(
                                 self.config.data_dir,
                                 prepared.repo_dir,
                                 scan_id=_int(scan["id"]),
@@ -764,6 +774,9 @@ class PostProcessor:
                                 metadata_id=metadata_id,
                                 result=poc_rows[0],
                             )
+                            self._evidence_captures[metadata_id] = capture
+                            if "poc_artifact_dir" in poc_rows[0]:
+                                poc_rows[0]["poc_artifact_dir"] = capture["artifact_dir"]
                     run_time_ms = int((now_utc() - started).total_seconds() * 1000)
                     with self.db.connect() as conn:
                         self.db.update_post_process_metadata(
@@ -1050,6 +1063,45 @@ class PostProcessor:
                 conn.commit()
             raise
 
+    @staticmethod
+    def _with_engine_blocks(
+        stage: str,
+        scan: dict[str, Any],
+        result: dict[str, Any],
+        prior: dict[str, Any],
+        capture: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Add the engine-owned v2.7 blocks beside the model's fields (spec 6.2); model fields stay as written."""
+        settings = investigation_settings(scan)
+        policy_version = settings["readiness_policy_version"]
+        result = dict(result)
+        if stage == "d3":
+            result["_engine_lifecycle"] = lifecycle_block(lifecycle_status(result, None, None), policy_version, False)
+        elif stage == "d4":
+            capture = capture or {}
+            result["_engine_evidence"] = evidence_block(
+                result,
+                set(capture.get("captured_paths") or []),
+                capture_complete=bool(capture.get("capture_complete")),
+                artifact_dir=str(capture.get("artifact_dir") or ""),
+                policy_version=policy_version,
+                legacy=False,
+            )
+        elif stage == "d5":
+            d4 = prior.get("d4") if isinstance(prior.get("d4"), dict) else {}
+            readiness = evaluate_readiness(
+                scan=scan,
+                d3=prior.get("d3") if isinstance(prior.get("d3"), dict) else None,
+                d4=d4,
+                evidence=d4.get("_engine_evidence") if isinstance(d4.get("_engine_evidence"), dict) else None,
+                d5=result,
+                evaluated_at=now_utc().isoformat(),
+            )
+            result["_engine_readiness"] = readiness
+            result["model_readiness_claim"] = result.get("submission_ready") is True
+            result["_chip_lifecycle"] = readiness["lifecycle_status"]
+        return result
+
     def _run_next_post_script_or_complete(
         self,
         scan: dict[str, Any],
@@ -1091,31 +1143,20 @@ class PostProcessor:
                 stage = stage_for_script(current, script_id)
                 condition = ""
                 condition_args: list[Any] = []
-                if stage == "d4":
-                    condition = """
+                if stage in {"d4", "d5"}:
+                    # Predicates are built from the gate constants only (no user input reaches the SQL text).
+                    predicate = d4_eligibility_sql() if stage == "d4" else d5_eligibility_sql()
+                    condition = f"""
                       AND EXISTS (
                         SELECT 1 FROM workflows.vulnerability_enrichments prior
                         WHERE prior.vulnerability_id = v.id
                           AND prior.post_script_id = %s
                           AND prior.supplemental_run_id IS NULL
                           AND prior.stub = false
-                          AND prior.result->>'verdict' IN ('confirmed', 'plausible_needs_poc')
+                          AND {predicate}
                       )
                     """
-                    condition_args.append(pipeline["d3"])
-                elif stage == "d5":
-                    condition = """
-                      AND EXISTS (
-                        SELECT 1 FROM workflows.vulnerability_enrichments prior
-                        WHERE prior.vulnerability_id = v.id
-                          AND prior.post_script_id = %s
-                          AND prior.supplemental_run_id IS NULL
-                          AND prior.stub = false
-                          AND prior.result->>'poc_status' = 'reproduced'
-                          AND COALESCE(prior.result->>'poc_artifact_dir', '') <> ''
-                      )
-                    """
-                    condition_args.append(pipeline["d4"])
+                    condition_args.append(pipeline["d3" if stage == "d4" else "d4"])
                 candidate_row = conn.execute(
                     f"""
                     SELECT v.*
@@ -1154,6 +1195,7 @@ class PostProcessor:
                 return complete_if_ready()
             prompt_template = post_script["content"]
             stage = stage_for_script(current, _int(post_script["id"]))
+            prior: dict[str, Any] = {}
             if stage in {"d4", "d5"}:
                 prior_rows = conn.execute(
                     """SELECT post_script_id, result, stub
@@ -1218,10 +1260,12 @@ class PostProcessor:
                 kind="v27_poc" if stage == "d4" else "post_script",
                 poc_finding_id=_int(row["id"]) if stage == "d4" else None,
             )
+            payload = strip_reserved_keys(payload)
             rows = validate_payload(payload, schema, multi_output=False)
             result = rows[0] if rows else {}
-            if stage == "d5":
-                enforce_report_readiness(result, prior.get("d4", {}))
+            capture = self._evidence_captures.pop(metadata_id, None)
+            if result and stage in {"d3", "d4", "d5"}:
+                result = self._with_engine_blocks(stage, current, result, prior, capture)
             run_time_ms = int((now_utc() - started).total_seconds() * 1000)
             with self.db.connect() as conn:
                 self.db.upsert_vulnerability_enrichment(

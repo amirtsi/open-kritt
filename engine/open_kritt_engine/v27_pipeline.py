@@ -2,7 +2,23 @@
 
 from typing import Any
 
-D3_PASS_VERDICTS = frozenset({"confirmed", "plausible_needs_poc"})
+from .impact_gate import (
+    BUG_REPRODUCED,
+    D3_PASS_VERDICTS,
+    D5_ELIGIBLE_IMPACT_STATUSES,
+    d5_eligible,
+)
+
+__all__ = [
+    "D3_PASS_VERDICTS",
+    "d4_eligibility_sql",
+    "d5_eligibility_sql",
+    "eligible_for_stage",
+    "pipeline_ids",
+    "preceding_results",
+    "prior_results",
+    "stage_for_script",
+]
 
 
 def pipeline_ids(scan: dict[str, Any]) -> dict[str, int]:
@@ -40,7 +56,7 @@ def eligible_for_stage(scan: dict[str, Any], script_id: int, results: dict[int, 
         return results.get(ids["d3"], {}).get("verdict") in D3_PASS_VERDICTS
     if stage == "d5":
         d4 = results.get(ids["d4"], {})
-        return d4.get("poc_status") == "reproduced" and bool(d4.get("poc_artifact_dir"))
+        return d5_eligible(d4.get("_engine_evidence"))
     return False
 
 
@@ -54,22 +70,22 @@ def preceding_results(scan: dict[str, Any], script_id: int, results: dict[int, d
     return {}
 
 
-def enforce_report_readiness(result: dict[str, Any], d4: dict[str, Any]) -> dict[str, Any]:
-    """Keep a model's report-ready claim behind explicit evidence gates."""
-    required = (
-        d4.get("poc_status") == "reproduced"
-        and bool(d4.get("poc_artifact_dir"))
-        and result.get("scope_status") == "in_scope_verified"
-        and result.get("novelty_status") == "novel_verified"
-        and bool(str(result.get("scope_evidence") or "").strip())
-        and bool(str(result.get("novelty_evidence") or "").strip())
-        and result.get("artifact_reference") == d4.get("poc_artifact_dir")
-        and not str(result.get("missing_requirements") or "").strip()
+def _sql_list(values) -> str:
+    return "(" + ", ".join(f"'{value}'" for value in values) + ")"
+
+
+def d4_eligibility_sql(result_column: str = "prior.result") -> str:
+    """SQL predicate over a D3 enrichment row's result column (constants only, no bind parameters)."""
+    verdicts = _sql_list(sorted(D3_PASS_VERDICTS))
+    return f"{result_column}->>'verdict' IN {verdicts}"
+
+
+def d5_eligibility_sql(result_column: str = "prior.result") -> str:
+    """SQL predicate over a D4 enrichment row's result column, mirroring ``impact_gate.d5_eligible``."""
+    evidence = f"{result_column}->'_engine_evidence'"
+    return (
+        f"{evidence}->>'bug_status' = '{BUG_REPRODUCED}'"
+        f" AND {evidence}->>'impact_status' IN {_sql_list(D5_ELIGIBLE_IMPACT_STATUSES)}"
+        f" AND {evidence}->>'capture_complete' = 'true'"
+        f" AND COALESCE({evidence}->>'artifact_dir', '') <> ''"
     )
-    if result.get("submission_ready") is True and not required:
-        result["submission_ready"] = False
-        result["missing_requirements"] = (
-            str(result.get("missing_requirements") or "").strip()
-            + "\nReadiness gate: verified PoC, scope, novelty, artifact reference and no missing requirements are required."
-        ).strip()
-    return result
