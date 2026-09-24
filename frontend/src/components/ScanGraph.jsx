@@ -23,6 +23,17 @@ const ATTEMPT_COLORS = {
 };
 
 const depthColor = (depth) => `var(--depth-${(Number(depth) || 0) % DEPTH_PALETTE_SIZE})`;
+
+// Funnel outcome keys are the result fields the backend bucketed. Plain keys
+// ("verdict") render as-is; a dotted path into an engine block
+// ("_engine_lifecycle.lifecycle_status") renders as its friendly last segment
+// ("lifecycle") so the funnel reads "lifecycle impact_proven 3".
+export function outcomeLabel(key) {
+  const name = String(key ?? '');
+  if (!name.includes('.')) return name;
+  const leaf = name.split('.').filter(Boolean).pop() || name;
+  return leaf.replace(/^_engine_/, '').replace(/_status$/, '') || leaf;
+}
 const count = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 const plural = (value, singular, pluralForm = `${singular}s`) => `${value} ${value === 1 ? singular : pluralForm}`;
 
@@ -252,8 +263,8 @@ function FunnelStage({ stage }) {
       )}
       {outcomeGroups.map(([key, values]) => (
         <div key={key} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginTop: 6 }}>
-          <span className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }}>
-            {key}
+          <span className="mono" style={{ fontSize: 10, color: 'var(--text-3)' }} title={key}>
+            {outcomeLabel(key)}
           </span>
           {Object.entries(values).map(([label, value]) => (
             <span

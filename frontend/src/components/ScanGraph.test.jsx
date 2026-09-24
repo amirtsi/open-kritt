@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import ScanGraph, { layoutScanGraph, NODE_WIDTH, ScanGraphPanel } from './ScanGraph.jsx';
+import ScanGraph, { layoutScanGraph, NODE_WIDTH, outcomeLabel, ScanGraphPanel } from './ScanGraph.jsx';
 
 const attempts = (overrides = {}) => ({
   completed: 0,
@@ -180,6 +180,31 @@ describe('ScanGraph', () => {
     expect(html).toContain('1 running');
     expect(html).toContain('2 done');
     expect(html).toContain('>verdict<');
+  });
+
+  it('labels dotted engine-block outcome paths with a friendly name', () => {
+    expect(outcomeLabel('verdict')).toBe('verdict');
+    expect(outcomeLabel('_engine_lifecycle.lifecycle_status')).toBe('lifecycle');
+    expect(outcomeLabel('_engine_evidence.bug_status')).toBe('bug');
+    expect(outcomeLabel('_engine_readiness.ready')).toBe('ready');
+    expect(outcomeLabel('')).toBe('');
+    const lifecycle = {
+      ...graph,
+      post: {
+        ...graph.post,
+        stages: [
+          {
+            ...graph.post.stages[3],
+            outcomes: { '_engine_lifecycle.lifecycle_status': { impact_proven: 2, bug_blocked: 1 } },
+          },
+        ],
+      },
+    };
+    const rendered = renderToStaticMarkup(<ScanGraph graph={lifecycle} />);
+    expect(rendered).toContain('>lifecycle<');
+    expect(rendered).toContain('title="_engine_lifecycle.lifecycle_status"');
+    expect(rendered).toContain('impact_proven 2');
+    expect(rendered).toContain('bug_blocked 1');
   });
 
   it('escapes untrusted step and script names', () => {
