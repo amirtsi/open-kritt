@@ -52,7 +52,7 @@ POST_SCRIPT_MARKDOWN_OUTPUT_KEYS = frozenset({"_reserved_report", "_reserved_poc
 POST_SCRIPT_CHIP_PREFIX = "_chip_"
 WORKFLOW_FIELD_TYPES = ("string", "number", "boolean", "array", "object")
 POST_SCRIPT_FIELD_TYPES = WORKFLOW_FIELD_TYPES
-MODEL_PROVIDERS = frozenset({"codex", "claude", "openrouter", "xai", "deepseek"})
+MODEL_PROVIDERS = frozenset({"codex", "claude", "openrouter", "omniroute", "xai", "deepseek"})
 THINKING_EFFORTS = frozenset({"default", "low", "medium", "high", "xhigh", "max", "ultra"})
 GENERATION_REQUEST_MAX_LENGTH = 20_000
 MODEL_ID_MAX_LENGTH = 200
@@ -65,6 +65,7 @@ MODEL_PROVIDER_HARNESSES = {
     "codex": frozenset({"codex"}),
     "claude": frozenset({"claude-code"}),
     "openrouter": frozenset({"codex", "claude-code"}),
+    "omniroute": frozenset({"codex", "claude-code"}),
     "xai": frozenset({"grok-build"}),
     "deepseek": frozenset({"codex"}),
 }
@@ -106,6 +107,7 @@ GENERATION_PROVIDER_ENV_KEYS = {
     "codex": frozenset({"CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_HOME"}),
     "claude": frozenset({"ANTHROPIC_API_KEY"}),
     "openrouter": frozenset({"OPENROUTER_API_KEY"}),
+    "omniroute": frozenset({"OMNIROUTE_API_KEY", "OMNIROUTE_BASE_URL"}),
     "xai": frozenset({"XAI_API_KEY", "GROK_BIN", "GROK_HOME"}),
     "deepseek": frozenset({"DEEPSEEK_API_KEY"}),
 }

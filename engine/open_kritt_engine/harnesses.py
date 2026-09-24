@@ -185,6 +185,7 @@ OPENROUTER_CURSOR_BASE_URL = "https://openrouter.ai/api/v1/cursor"
 OPENROUTER_CODEX_BASE_URL = "https://openrouter.ai/api/v1"
 DEEPSEEK_CODEX_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_CODEX_MODEL_CATALOG = "/app/open_kritt_engine/deepseek_models.json"
+OMNIROUTE_DEFAULT_BASE_URL = "http://omniroute:20128/v1"
 OPENROUTER_MODEL_ALIASES = {
     "glm-5.2": "z-ai/glm-5.2",
     "grok-4.5": "x-ai/grok-4.5",
@@ -203,7 +204,7 @@ CLAUDE_MODEL_ALIASES = {
     "opus-4.8": "claude-opus-4-8",
 }
 DEFAULT_MODEL_PROVIDER = "openrouter"
-MODEL_PROVIDERS = {"codex", "claude", "openrouter", "xai", "deepseek"}
+MODEL_PROVIDERS = {"codex", "claude", "openrouter", "omniroute", "xai", "deepseek"}
 GROK_BUILD_THINKING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 DEFAULT_GROK_BUILD_MODEL = "grok-4.6"
 GROK_BUILD_RUNTIME_ENV = {
@@ -378,6 +379,7 @@ def _prepare_docker_sandbox(cmd: list[str]):
         [cmd[0], "network", "create", "--label", "open-kritt.scan-sandbox=1", network],
     )
     if create.returncode == 0:
+        _connect_omniroute_network(cmd[0], network)
         return
 
     create_error = f"{create.stdout}\n{create.stderr}".lower()
@@ -400,9 +402,20 @@ def _prepare_docker_sandbox(cmd: list[str]):
                 ],
             )
             if fallback.returncode == 0:
+                _connect_omniroute_network(cmd[0], network)
                 return
 
     raise HarnessError("Could not create the scan network.", code="start_failed")
+
+
+def _connect_omniroute_network(docker: str, network: str) -> None:
+    """Make the optional Compose gateway reachable from an isolated runner."""
+    # Only an explicitly configured Compose gateway is attached; scans that never
+    # opted into OmniRoute keep the plain isolated network.
+    base_url = os.getenv("OMNIROUTE_BASE_URL") or ""
+    if "omniroute" not in base_url.lower():
+        return
+    _docker_control_run([docker, "network", "connect", network, "open-kritt-omniroute"])
 
 
 def _cleanup_docker_run_container(cmd: list[str], env: dict[str, str] | None = None):
@@ -981,6 +994,8 @@ def _scan_docker_command(
         "CODEX_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "OMNIROUTE_API_KEY",
+        "OMNIROUTE_BASE_URL",
         "XAI_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
@@ -1094,6 +1109,8 @@ def codex_cli_model_provider(
         return None
     if selected == "openrouter":
         return (configured or "openrouter") if allow_tools else "openrouter"
+    if selected == "omniroute":
+        return "omniroute"
     return selected or configured
 
 
@@ -1121,8 +1138,8 @@ def claude_model_provider(
     model: str, env: dict[str, str] | None = None, model_provider: str | None = None
 ) -> str | None:
     requested_provider = normalize_model_provider(model_provider)
-    if requested_provider == "openrouter":
-        return "openrouter"
+    if requested_provider in {"openrouter", "omniroute"}:
+        return requested_provider
     if requested_provider:
         return None
     actual_env = env or os.environ
@@ -1144,7 +1161,7 @@ def _claude_model_name(model: str, env: dict[str, str], model_provider: str | No
 
 def _apply_claude_host_auth_home(env: dict[str, str], provider: str | None) -> dict[str, str]:
     auth_home = env.get("ENGINE_CLAUDE_AUTH_HOME") or os.getenv("ENGINE_CLAUDE_AUTH_HOME")
-    if provider == "openrouter" or not auth_home or _env_enabled("ENGINE_CLAUDE_DOCKER_RUNNER"):
+    if provider in {"openrouter", "omniroute"} or not auth_home or _env_enabled("ENGINE_CLAUDE_DOCKER_RUNNER"):
         return env
     actual_env = dict(env)
     auth_home = str(Path(auth_home).expanduser())
@@ -1163,7 +1180,15 @@ def _apply_claude_host_auth_home(env: dict[str, str], provider: str | None) -> d
 
 def _claude_env(env: dict[str, str], model: str, model_provider: str | None = None) -> dict[str, str]:
     actual_env = dict(env)
-    if claude_model_provider(model, actual_env, model_provider) == "openrouter":
+    provider = claude_model_provider(model, actual_env, model_provider)
+    if provider == "omniroute":
+        actual_env["ANTHROPIC_BASE_URL"] = (
+            actual_env.get("OMNIROUTE_BASE_URL") or OMNIROUTE_DEFAULT_BASE_URL
+        ).removesuffix("/v1")
+        actual_env["ANTHROPIC_AUTH_TOKEN"] = actual_env.get("OMNIROUTE_API_KEY") or "omniroute"
+        actual_env["ANTHROPIC_API_KEY"] = ""
+        return actual_env
+    if provider == "openrouter":
         if not actual_env.get("OPENROUTER_API_KEY"):
             raise HarnessError("OPENROUTER_API_KEY is required when model provider is openrouter")
         routed_model = OPENROUTER_MODEL_ALIASES.get(model, model)
@@ -1698,14 +1723,22 @@ def codex_exec_command(
         for feature in TOOL_FREE_CODEX_DISABLED_FEATURES:
             command.extend(["--disable", feature])
     command.extend(["--output-schema", schema_path, "-o", output_path])
-    if not allow_tools and cli_model_provider == "openrouter":
+    if cli_model_provider == "omniroute" or (not allow_tools and cli_model_provider == "openrouter"):
         # `--ignore-user-config` removes custom providers along with user
-        # settings. Recreate only OpenRouter's non-secret definition; Codex
+        # settings. Recreate the gateway's non-secret definition; Codex
         # reads the actual credential from the named environment variable.
-        command.extend(["-c", 'model_providers.openrouter.name="OpenRouter"'])
-        command.extend(["-c", f'model_providers.openrouter.base_url="{OPENROUTER_CODEX_BASE_URL}"'])
-        command.extend(["-c", 'model_providers.openrouter.env_key="OPENROUTER_API_KEY"'])
-        command.extend(["-c", 'model_providers.openrouter.wire_api="responses"'])
+        provider_id = cli_model_provider
+        base_url = (
+            OPENROUTER_CODEX_BASE_URL
+            if provider_id == "openrouter"
+            else os.getenv("OMNIROUTE_BASE_URL", OMNIROUTE_DEFAULT_BASE_URL)
+        )
+        env_key = "OPENROUTER_API_KEY" if provider_id == "openrouter" else "OMNIROUTE_API_KEY"
+        provider_name = "OpenRouter" if provider_id == "openrouter" else "OmniRoute"
+        command.extend(["-c", f'model_providers.{provider_id}.name="{provider_name}"'])
+        command.extend(["-c", f'model_providers.{provider_id}.base_url="{base_url}"'])
+        command.extend(["-c", f'model_providers.{provider_id}.env_key="{env_key}"'])
+        command.extend(["-c", f'model_providers.{provider_id}.wire_api="responses"'])
     if cli_model_provider == "deepseek":
         _append_deepseek_codex_config(command)
     if cli_model_provider:

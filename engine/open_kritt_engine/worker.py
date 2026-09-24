@@ -546,6 +546,41 @@ class Worker:
             maximum=86400,
         )
 
+    def model_failover_chain(self) -> tuple[ModelSelection, ...]:
+        """Resolve the optional provider:model:harness[:thinking] failover chain."""
+        raw = runtime_value("ENGINE_MODEL_FAILOVER_CHAIN", "", data_dir=getattr(self.config, "data_dir", None)) or ""
+        selections = []
+        for item in str(raw).split(","):
+            parts = [part.strip() for part in item.split(":")]
+            if len(parts) < 3 or not all(parts[:3]):
+                continue
+            provider = parts[0].lower()
+            harness = normalize_harness_name(parts[2])
+            compatible = {
+                "codex": {"codex"},
+                "claude": {"claude-code"},
+                "openrouter": {"codex", "claude-code"},
+                "omniroute": {"codex", "claude-code"},
+                "xai": {"grok-build"},
+            }
+            if harness not in compatible.get(provider, set()):
+                continue
+            selections.append(
+                ModelSelection(
+                    model=parts[1],
+                    model_provider=provider,
+                    harness=harness,
+                    thinking_effort=parts[3] if len(parts) > 3 and parts[3] else "medium",
+                )
+            )
+        return tuple(selections)
+
+    def failover_selection(self, current: ModelSelection) -> ModelSelection | None:
+        for selection in self.model_failover_chain():
+            if selection != current:
+                return selection
+        return None
+
     def runtime_codex_max_subagents(self) -> int:
         return runtime_int(
             "ENGINE_CODEX_MAX_SUBAGENTS_PER_SESSION",
@@ -1439,13 +1474,44 @@ class Worker:
                 if not self._worker_can_pick_job(worker_id):
                     return did_work
                 model_selection = model_selection_for_depth(current, getattr(job, "depth", 0))
-                did_claim = self.execute_job(
-                    scan=current,
-                    workflow_id=workflow.id,
-                    job=job,
-                    harness=self._harness_for_model_selection(model_selection),
-                    model_selection=model_selection,
-                )
+                try:
+                    did_claim = self.execute_job(
+                        scan=current,
+                        workflow_id=workflow.id,
+                        job=job,
+                        harness=self._harness_for_model_selection(model_selection),
+                        model_selection=model_selection,
+                    )
+                except RateLimitExhausted as limit_error:
+                    candidates = [
+                        selection for selection in self.model_failover_chain() if selection != model_selection
+                    ]
+                    if not candidates:
+                        raise
+                    failover_error = None
+                    for fallback in candidates:
+                        LOGGER.warning(
+                            "scan %s switching from %s/%s to failover %s/%s after provider limit",
+                            scan_id,
+                            model_selection.model_provider,
+                            model_selection.model,
+                            fallback.model_provider,
+                            fallback.model,
+                        )
+                        try:
+                            did_claim = self.execute_job(
+                                scan=current,
+                                workflow_id=workflow.id,
+                                job=job,
+                                harness=self._harness_for_model_selection(fallback),
+                                model_selection=fallback,
+                            )
+                            failover_error = None
+                            break
+                        except RateLimitExhausted as fallback_error:
+                            failover_error = fallback_error
+                    if failover_error is not None:
+                        raise failover_error from limit_error
                 if did_claim:
                     return True
             if not did_claim:

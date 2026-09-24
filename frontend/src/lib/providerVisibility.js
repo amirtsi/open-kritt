@@ -2,6 +2,7 @@ export const PROVIDER_LABELS = {
   codex: 'Codex',
   claude: 'Claude Code',
   openrouter: 'OpenRouter',
+  omniroute: 'OmniRoute',
   xai: 'xAI',
   deepseek: 'DeepSeek',
 };

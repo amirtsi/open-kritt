@@ -114,6 +114,22 @@ export function modelCatalogModels(catalog) {
 
 export function modelCatalogEntry(provider, catalog) {
   const models = modelCatalogModels(catalog);
+  if (provider === 'omniroute' && !models.length) {
+    return {
+      provider,
+      input: 'text',
+      models: [
+        {
+          id: 'auto',
+          label: 'OmniRoute auto',
+          thinkingEfforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
+          isDefault: true,
+        },
+      ],
+      defaultModel: 'auto',
+      status: 'ready',
+    };
+  }
   const configuredDefault = normalizedModel(catalogValue(catalog, 'defaultModel', 'default_model'));
   const defaultModel = models.some((model) => model.id === configuredDefault) ? configuredDefault : null;
 
@@ -150,7 +166,7 @@ export function modelCatalogEntry(provider, catalog) {
   const status = models.length > 0 && !defaultIsMissing ? 'ready' : hasText(lastError) ? 'unavailable' : 'loading';
   return {
     provider,
-    input: provider === 'openrouter' || provider === 'xai' ? 'text' : 'select',
+    input: provider === 'openrouter' || provider === 'omniroute' || provider === 'xai' ? 'text' : 'select',
     models,
     defaultModel,
     status,
