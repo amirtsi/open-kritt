@@ -317,6 +317,55 @@ def test_anchored_dedupe_batches_carry_canonicals_and_next_50():
     assert "Target findings JSON" in prompt
 
 
+def test_dedupe_prompt_compacts_large_anchor_history_below_codex_input_limit():
+    long_text = "x" * 10_000
+    anchors = []
+    for row_id in range(1, 1_601):
+        row = vuln(row_id, canonical=True, canonical_id=row_id)
+        row["json_answer"].update(
+            {
+                "summary": long_text,
+                "vulnerability_type": long_text,
+                "file_path": long_text,
+                "malicious_actor": long_text,
+                "trigger_flow": long_text,
+                "explanation": long_text,
+            }
+        )
+        anchors.append(row)
+    targets = [vuln(2_000)]
+
+    prompt = build_dedupe_prompt(scan(), anchors, targets)
+
+    assert len(prompt) < 1_048_576
+    assert "malicious_actor" not in prompt.split("Target findings JSON:", 1)[0]
+
+
+def test_ranker_prompt_compacts_large_anchor_history_below_codex_input_limit():
+    long_text = "x" * 10_000
+    anchors = []
+    for row_id in range(1, 801):
+        row = vuln(row_id, canonical=True, canonical_id=row_id, bounty_rank=row_id)
+        row["json_answer"].update(
+            {
+                "summary": long_text,
+                "vulnerability_type": long_text,
+                "file_path": long_text,
+                "malicious_actor": long_text,
+                "trigger_flow": long_text,
+                "explanation": long_text,
+            }
+        )
+        row["bounty_rank_reasoning"] = long_text
+        row["rank_root_bug"] = long_text
+        anchors.append(row)
+
+    prompt = build_ranker_prompt(scan(), anchors, [vuln(2_000, canonical=True, canonical_id=2_000)])
+
+    assert len(prompt) < 1_048_576
+    assert "malicious_actor" not in prompt.split("Target findings JSON:", 1)[0]
+
+
 def test_dedupe_validation_requires_every_target_once_and_maps_anchors():
     anchors = [vuln(1, canonical=True, canonical_id=1)]
     targets = [vuln(2), vuln(3), vuln(4)]

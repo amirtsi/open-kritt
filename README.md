@@ -55,7 +55,13 @@ over their prompts, workflows, model providers, and infrastructure.
 - **Prioritize results** — apply custom severity rankers, a consistent finding schema,
   and automatic de-duplication.
 - **Bring your own model access** — use a Codex login or connect through OpenAI,
-  Anthropic, DeepSeek, OpenRouter, or xAI.
+  Anthropic, DeepSeek, OpenRouter, OmniRoute, or xAI.
+
+### OmniRoute gateway and model failover
+
+OpenKritt can use a local [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway as the `omniroute` model provider. OmniRoute exposes an OpenAI-compatible endpoint and its `auto` model can route across connected Claude, Codex, and other providers. Start the optional pinned gateway with `docker compose --profile omniroute up -d omniroute`, then select OmniRoute in the scan model configuration (the default endpoint is `http://omniroute:20128/v1`).
+
+For long scans, set `ENGINE_MODEL_FAILOVER_CHAIN` to a comma-separated sequence such as `claude:claude-sonnet-5:claude-code,codex:gpt-5-codex:codex`. When a provider reports a quota or rate-limit failure, the current job is retried with the next configured selection before the scan is deferred. Provider credentials and source code still leave the machine according to the selected gateway/provider configuration.
 
 > **Built from real security research.** The Kritt team has earned over **$1,500,000 in
 > bug-bounty payouts** under the researcher name **Blockian**

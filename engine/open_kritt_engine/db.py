@@ -79,7 +79,7 @@ def _completed_scan_reasoning_sql() -> str:
     return """CASE
         WHEN reasoning->>'code' = 'rate_limited'
         THEN NULLIF(
-            reasoning - 'code' - 'limit_kind' - 'error' - 'retry_after' - 'retry_count',
+            reasoning - 'code' - 'limit_kind' - 'error' - 'retry_after' - 'retry_count' - 'resume_status',
             '{}'::jsonb
         )
         ELSE reasoning
@@ -139,10 +139,15 @@ class Database:
                 LIMIT 1
             )
             UPDATE public.scans s
-            SET status = 'running',
+            SET status = CASE
+                    WHEN s.status = 'rate_limited'
+                         AND reasoning->>'resume_status' = 'post_processing'
+                    THEN 'post_processing'
+                    ELSE 'running'
+                END,
                 reasoning = CASE
                     WHEN s.status = 'rate_limited'
-                    THEN reasoning - 'error' - 'retry_after'
+                    THEN reasoning - 'error' - 'retry_after' - 'resume_status'
                     ELSE reasoning
                 END,
                 last_resumed_at = CASE
@@ -563,7 +568,7 @@ class Database:
     ) -> bool:
         current = conn.execute(
             """
-            SELECT reasoning
+            SELECT status, reasoning
             FROM public.scans
             WHERE id = %s
               AND status IN ('running', 'prewarming_cache', 'post_processing', 'failed')
@@ -596,6 +601,9 @@ class Database:
                 "limit_kind": limit_kind,
                 "error": error,
                 "retry_count": retry_count,
+                "resume_status": (
+                    "post_processing" if current.get("status") == "post_processing" else "running"
+                ),
             }
         )
         if autoscale_workers and limit_kind in {"provider_throttled", "subagent_limited"}:
