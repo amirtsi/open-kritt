@@ -1,0 +1,17 @@
+{
+  "name": "v2.7 D5 Scope Severity and Report Readiness",
+  "description": "Evaluate submission readiness only after D4 reproduced the issue and preserved local PoC evidence.",
+  "content": "Repository: {{repo_full}} at commit {{commit_sha}}. Scope: {{repo_scope}}. Dependencies: {{dependencies}}. Configuration: {{configuration}}.\nCanonical candidate: {{summary}}. Claimed type: {{vulnerability_type}}. Fault: {{file_path}}:{{line}}.\nActor: {{malicious_actor}}. Claimed trigger: {{malicious_input_example}}. Trace: {{trigger_flow}}.\nExplanation and root-cause fingerprint: {{explanation}}.\nThe engine supplies D3 and D4 results above this prompt. This stage runs only after D4 has reproduced the impact and persisted PoC artifacts. Check the exact repository/asset and supplied bounty-program scope, eligible impact, known issues/audits, and severity against OBSERVED behavior. If program rules or deployment prerequisites are not supplied or verified, submission_ready must be false and missing_requirements must name them. Do not claim BTC theft, critical severity, novelty, or eligibility solely from a candidate description. Use scope_status=in_scope_verified only with an exact program rule and affected asset; otherwise use unverified or out_of_scope. Use novelty_status=novel_verified only with concrete checked sources; otherwise use unverified or known_duplicate. Cite those checks in scope_evidence and novelty_evidence. Copy the saved D4 poc_artifact_dir exactly into artifact_reference. Produce a reviewer-ready draft with preconditions, exact local commands, attack result, negative control, repeatability, impact, and limitations. The report must not overstate beyond D4 evidence. submission_ready=true only when scope and novelty evidence are concrete and the persisted PoC reproduces the claimed impact.\n",
+  "outputFormat": {
+    "submission_ready": "boolean",
+    "scope_status": "string",
+    "severity": "string",
+    "novelty_status": "string",
+    "impact_evidence": "string",
+    "missing_requirements": "string",
+    "artifact_reference": "string",
+    "_reserved_report": "string",
+    "scope_evidence": "string",
+    "novelty_evidence": "string"
+  }
+}

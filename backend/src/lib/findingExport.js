@@ -313,7 +313,7 @@ function readmeMarkdown(scan, findings, findingDirectories) {
   return lines.join('\n');
 }
 
-function findingManifest(scan, ordered, findingDirectories) {
+function findingManifest(scan, ordered, findingDirectories, pocArtifacts = new Map()) {
   return {
     formatVersion: EXPORT_FORMAT_VERSION,
     privacyProfile: 'share-safe',
@@ -333,6 +333,13 @@ function findingManifest(scan, ordered, findingDirectories) {
           postProcessing: `${directory}/post-processing.json`,
           report: hasReport ? `${directory}/report.txt` : null,
           poc: hasPoc ? `${directory}/poc.txt` : null,
+          ...((pocArtifacts.get(String(vulnerability.id)) || []).length
+            ? {
+                pocArtifacts: pocArtifacts
+                  .get(String(vulnerability.id))
+                  .map((file) => `${directory}/poc-artifacts/${file.name}`),
+              }
+            : {}),
         },
       };
     }),
@@ -352,9 +359,9 @@ function findingManifest(scan, ordered, findingDirectories) {
   };
 }
 
-function findingExportFiles(scan, ordered, findingDirectories, exportedAt) {
+function findingExportFiles(scan, ordered, findingDirectories, exportedAt, pocArtifacts = new Map()) {
   const manifest = {
-    ...findingManifest(scan, ordered, findingDirectories),
+    ...findingManifest(scan, ordered, findingDirectories, pocArtifacts),
     exportedAt: new Date(exportedAt).toISOString(),
   };
   const files = [
@@ -380,6 +387,9 @@ function findingExportFiles(scan, ordered, findingDirectories, exportedAt) {
       files.push({ path: `${directory}/report.txt`, content: () => (report.endsWith('\n') ? report : `${report}\n`) });
     }
     if (poc) files.push({ path: `${directory}/poc.txt`, content: () => (poc.endsWith('\n') ? poc : `${poc}\n`) });
+    for (const artifact of pocArtifacts.get(String(vulnerability.id)) || []) {
+      files.push({ path: `${directory}/poc-artifacts/${artifact.name}`, content: () => artifact.content });
+    }
   });
   return files;
 }
@@ -392,6 +402,7 @@ export function createFindingExport(
     maxBytes = MAX_FINDING_EXPORT_BYTES,
     maxFileBytes = MAX_FINDING_EXPORT_FILE_BYTES,
     maxFindings = MAX_FINDING_EXPORT_FINDINGS,
+    pocArtifacts = new Map(),
   } = {}
 ) {
   const byteLimit = Number.isSafeInteger(maxBytes) && maxBytes > 0 ? maxBytes : MAX_FINDING_EXPORT_BYTES;
@@ -412,7 +423,7 @@ export function createFindingExport(
     return `finding-${ordinal}-${exportSlug(vulnerability.summary, `id-${vulnerability.id}`, 72)}`;
   });
   const exportTime = new Date(exportedAt);
-  const files = findingExportFiles(scan, ordered, findingDirectories, exportTime);
+  const files = findingExportFiles(scan, ordered, findingDirectories, exportTime, pocArtifacts);
   let totalBytes = 0;
   for (const file of files) {
     // Content is generated one file at a time for preflight and discarded. The

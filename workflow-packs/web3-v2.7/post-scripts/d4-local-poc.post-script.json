@@ -1,0 +1,22 @@
+{
+  "name": "v2.7 D4 Local PoC and Negative Control",
+  "description": "Run a minimal local PoC, negative control, and repeatability checks for D3 survivors; preserve files as scan artifacts.",
+  "content": "Repository: {{repo_full}} at commit {{commit_sha}}. Scope: {{repo_scope}}. Dependencies: {{dependencies}}. Configuration: {{configuration}}.\nCanonical candidate: {{summary}}. Claimed type: {{vulnerability_type}}. Fault: {{file_path}}:{{line}}.\nActor: {{malicious_actor}}. Claimed trigger: {{malicious_input_example}}. Trace: {{trigger_flow}}.\nExplanation and root-cause fingerprint: {{explanation}}.\nThis candidate survived D3. The engine supplies the D3 verdict and evidence above this prompt. Treat it as a hypothesis to test. Work only in the isolated pinned checkout; never send attack traffic to public services, use real secrets, or broadcast a live transaction.\nBuild the smallest feasible test: unit test, real component harness, integration with local DB/protocol state, then local multi-actor or fork simulation only when necessary. Run the attack and a negative control using the same relevant path with corrected identity/domain/state. Repeat both at least twice to check determinism. Prove the security impact, not just a crash or error text. Write the executable test/harness and actual command output to files INSIDE the repository workspace. Return relative paths for the test, attack output, negative-control output, and repeat output in poc_artifact_paths. Do not claim reproduced unless all files physically exist, attack and negative-control outcomes differ as expected, and repeated runs are consistent. Report exact command, stdout/stderr/exit code, expected/observed results and blockers. A proposed test, a mock of the bug, or a successful build is not a PoC.\nUse exactly one poc_status: reproduced, not_reproduced, blocked_missing_dependency, blocked_missing_configuration, unsafe_external_dependency, non_deterministic, invalidated_by_test. Set poc_artifact_dir to an empty string; the engine fills it only after verifying and copying actual files. _reserved_poc may summarize observed evidence, but cannot substitute for the saved artifacts.\n",
+  "outputFormat": {
+    "poc_status": "string",
+    "poc_command": "string",
+    "poc_expected": "string",
+    "poc_observed": "string",
+    "poc_stdout": "string",
+    "poc_stderr": "string",
+    "poc_exit_code": "number",
+    "negative_control_command": "string",
+    "negative_control_observed": "string",
+    "negative_control_exit_code": "number",
+    "repeat_count": "number",
+    "poc_artifact_paths": "array",
+    "poc_artifact_dir": "string",
+    "remaining_limits": "string",
+    "_reserved_poc": "string"
+  }
+}

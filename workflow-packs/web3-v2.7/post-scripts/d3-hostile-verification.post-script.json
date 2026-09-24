@@ -1,0 +1,16 @@
+{
+  "name": "v2.7 D3 Hostile Canonical Verification",
+  "description": "Verify only a canonical root cause after built-in semantic deduplication; no PoC work at this stage.",
+  "content": "Repository: {{repo_full}} at commit {{commit_sha}}. Scope: {{repo_scope}}. Dependencies: {{dependencies}}. Configuration: {{configuration}}.\nCanonical candidate: {{summary}}. Claimed type: {{vulnerability_type}}. Fault: {{file_path}}:{{line}}.\nActor: {{malicious_actor}}. Claimed trigger: {{malicious_input_example}}. Trace: {{trigger_flow}}.\nExplanation and root-cause fingerprint: {{explanation}}.\nRe-read every cited production operation and attacker-to-impact hop at the pinned commit. Try to disprove the candidate using dominating guards, authorization and interceptors, default deployment configuration, DB constraints, transaction/lock semantics, recovery paths, and intended behavior. Use a negative-control hypothesis. Check known issues/audits and exact program scope only when evidence is available. Do not build or run a PoC here.\nReturn exactly one verdict: confirmed, plausible_needs_poc, known_duplicate, out_of_scope, configuration_only, privileged_only, false_positive, or insufficient_evidence. confirmed means source-level proof of the complete trigger and concrete impact, still requiring D4 reproduction. plausible_needs_poc means a concrete fault and plausible impact with a named fact requiring reproduction. Do not rescue speculation with this label. Identify the least-privileged actor, existing guard, first unsupported hop, source evidence, impact, and remaining deployment/scope facts. Reject an unreachable or guarded candidate before D4.\n",
+  "outputFormat": {
+    "verdict": "string",
+    "reason": "string",
+    "reachability_evidence": "string",
+    "guard_analysis": "string",
+    "impact_evidence": "string",
+    "negative_control_plan": "string",
+    "missing_evidence": "string",
+    "novelty_status": "string",
+    "scope_status": "string"
+  }
+}
