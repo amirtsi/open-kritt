@@ -20,8 +20,10 @@ import {
   serializeStep,
   serializeSupplementalPostScriptRun,
   serializeVulnerability,
+  serializeWorkflow,
 } from '../src/lib/serialize.js';
 import { SCAN_STATUSES } from '../src/lib/constants.js';
+import { READINESS_POLICY_VERSION, V27_WORKFLOW_NAME } from '../src/lib/v27Pipeline.js';
 
 test('active workers expose workflow depth only for workflow steps', () => {
   assert.equal(activeJobWorkflowDepth({ kind: 'step' }, { depth: 2 }), 2);
@@ -570,4 +572,23 @@ test('terminal scan cause outranks later cleanup interruptions', () => {
 
   assert.equal(isDerivativeScanStatusError(cleanup.message), true);
   assert.equal(orderScanErrorsForDisplay([cleanup, terminal])[0], terminal);
+});
+
+test('workflow serialization exposes the readiness gate only for the v2.7 workflow', () => {
+  const base = { id: 7n, description: '', extra: [], stepIds: [], insertedAt: null, updatedAt: null };
+  const step = {
+    id: 1n,
+    name: 'Investigate',
+    depth: 0,
+    multiOutput: true,
+    isLastStep: true,
+    content: 'x',
+    outputFormat: JSON.stringify({ impact_chain: { type: 'array', items: 'string' }, paths: { type: 'array' } }),
+    outputTable: 'workflows.vulnerabilities',
+  };
+  const gated = serializeWorkflow({ ...base, name: V27_WORKFLOW_NAME }, [step]);
+  assert.equal(gated.readinessGate, READINESS_POLICY_VERSION);
+  assert.equal(serializeWorkflow({ ...base, name: 'Other flow' }, [step]).readinessGate, null);
+  // Serialized output formats keep nested descriptors and legacy type-only meaning.
+  assert.deepEqual(gated.steps[0].outputFormat, { impact_chain: { type: 'array', items: 'string' }, paths: 'array' });
 });

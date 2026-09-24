@@ -7,6 +7,7 @@ import {
   GENERATION_REQUEST_MAX_LENGTH,
 } from './constants.js';
 import { validateGeneratedPostScript, validateGeneratedWorkflow, ValidationError } from './validation.js';
+import { READINESS_POLICY_VERSION, V27_WORKFLOW_NAME } from './v27Pipeline.js';
 
 // "2h ago" style relative time from a Date.
 export function timeAgo(date) {
@@ -25,6 +26,8 @@ export function timeAgo(date) {
   return `${Math.floor(months / 12)}y`;
 }
 
+// Descriptor-preserving: nested definitions survive, legacy type-only values
+// keep their meaning ({ type: 'array' } -> 'array').
 function safeParseFormat(text) {
   try {
     return normalizeOutputFormat(text);
@@ -71,6 +74,9 @@ export function serializeWorkflow(workflow, steps, { scanCount = 0, lastUsed = n
       return { depth: d, count: cnt, bound, label: `d${d}${cnt > 1 ? ` ×${cnt}` : ''}` };
     }),
     steps: serializedSteps,
+    // The engine-enforced readiness gate (spec 4.2). The UI keys every
+    // gate-specific behaviour on this field; null means no gate runs.
+    readinessGate: workflow.name === V27_WORKFLOW_NAME ? READINESS_POLICY_VERSION : null,
     scanCount,
     lastUsed,
     isDefault,

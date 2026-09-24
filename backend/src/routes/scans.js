@@ -22,6 +22,7 @@ import { lockWorkflowForScan } from '../lib/workflowLocks.js';
 import { lockPostScriptForScan } from '../lib/postScriptLocks.js';
 import { lockAgentSkillForScan } from '../lib/agentSkillLocks.js';
 import { resolveV27Pipeline } from '../lib/v27Pipeline.js';
+import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
 import {
   createFindingExport,
@@ -638,6 +639,10 @@ export async function patchScanIfPresent(tx, scanId, body, { assertAvailable, av
     }
   }
 
+  // Investigation kind and readiness policy are snapshotted at creation; a
+  // resubmission with identical values is harmless, anything else is rejected.
+  assertImmutableInvestigationKeys(existing.configuration, body?.configuration);
+
   const availabilityChecker = assertAvailable || transactionModelAvailabilityChecker(tx, availabilityOptions);
   const hasModelOverrides =
     Object.prototype.hasOwnProperty.call(body, 'model_overrides') ||
@@ -986,11 +991,10 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    const configurationObject =
-      valid.configuration && typeof valid.configuration === 'object' && !Array.isArray(valid.configuration)
-        ? valid.configuration
-        : {};
     const v27Pipeline = await resolveV27Pipeline(prisma, valid.workflowId);
+    const investigation = investigationKindForScan(valid.configuration, v27Pipeline);
+    if (investigation.errors.length) throw new ValidationError(investigation.errors);
+    const configurationObject = investigation.configuration;
     const primaryPostScriptId = v27Pipeline?.d3 ?? `${valid.postScriptId}`;
     const configuredPostScriptIds = v27Pipeline
       ? [v27Pipeline.d3, v27Pipeline.d4, v27Pipeline.d5]
@@ -1121,7 +1125,7 @@ router.post('/', async (req, res, next) => {
           configuration: {
             ...configurationObject,
             post_script_ids: configuredPostScriptIds,
-            ...(v27Pipeline ? { v27_pipeline: v27Pipeline } : {}),
+            ...(v27Pipeline ? { v27_pipeline: { d3: v27Pipeline.d3, d4: v27Pipeline.d4, d5: v27Pipeline.d5 } } : {}),
             agent_skill_ids: configuredAgentSkillIds,
             post_processing_thinking_effort: valid.postProcessingThinkingEffort,
             ...(valid.postProcessingModelOverride
