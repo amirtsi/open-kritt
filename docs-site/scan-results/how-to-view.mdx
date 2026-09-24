@@ -25,6 +25,15 @@ Open any scan to see:
 - **Findings** - the list of vulnerabilities, ordered by your ranker and annotated with
   [chips](/post-scripts/chips) from post-scripts. Findings with post-processing added after
   the scan show a `+post ×N` indicator that remains cumulative across multiple runs.
+- **Scan graph** - the workflow drawn as one box per step, in columns by depth. Each box
+  shows completed over expected lineages, a bar of completed, running, failed, and
+  interrupted attempts, and how many records (or findings, for the last depth) the step
+  emitted. Edges are labelled with the lineages that flowed between two steps; a dashed
+  edge means some expected lineages have not been attempted yet. Below the steps, the
+  post-processing funnel shows raw, canonical, and duplicate findings, then each
+  post-script with its attempt counts and a breakdown of result values such as
+  `poc_status` or `verdict`. The panel refreshes every two seconds while the scan is
+  active and can be collapsed.
 
 ## The findings list
 

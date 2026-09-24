@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useFetch } from '../lib/useFetch.js';
@@ -6,6 +6,7 @@ import { usePageChrome } from '../context/ui.jsx';
 import { CardLinkOverlay, Spinner, ErrorState, StatusBadge, Button } from '../components/ui.jsx';
 import LinkifiedText from '../components/LinkifiedText.jsx';
 import ResourceNotice from '../components/ResourceNotice.jsx';
+import { ScanGraphPanel } from '../components/ScanGraph.jsx';
 import {
   sevColor,
   findingSeverity,
@@ -78,6 +79,69 @@ export function supplementalPostScriptAvailability(scan, findings = []) {
   return { ready: true, message: 'Run a post-script on selected findings without resuming the scan.' };
 }
 
+// Scan states whose graph counts still change, so the panel keeps polling.
+const GRAPH_LIVE_STATUSES = ['prewarming_cache', 'running', 'rate_limited', 'post_processing'];
+
+const FINDING_SORT_OPTIONS = [
+  { value: 'rank', label: 'Rank' },
+  { value: 'severity', label: 'Severity' },
+  { value: 'poc', label: 'PoC' },
+  { value: 'rating', label: 'Rating' },
+  { value: 'type', label: 'Type' },
+  { value: 'actor', label: 'Actor' },
+];
+
+const SEVERITY_SORT_ORDER = { critical: 5, high: 4, medium: 3, low: 2, informational: 1, info: 1 };
+
+function findingHasPoc(finding) {
+  const values = [
+    finding?.postScriptAnswer?._reserved_poc,
+    ...(finding?.enrichments || []).map((item) => item?.result?._reserved_poc),
+    finding?.malicious_input_example,
+    finding?.jsonAnswer?.malicious_input_example,
+  ];
+  return values.some((value) => typeof value === 'string' && value.trim().length > 0);
+}
+
+function findingRating(finding) {
+  const values = [
+    finding?.bountyRank?.rank,
+    finding?.bountyRank?.minimumReward,
+    finding?.bountyRank?.maximumReward,
+    finding?.postScriptAnswer?.cvss,
+    ...(finding?.enrichments || []).map((item) => item?.result?.cvss ?? item?.result?.rating),
+  ];
+  const numeric = values.map(Number).find((value) => Number.isFinite(value));
+  return numeric ?? 0;
+}
+
+export function sortFindings(findings, sortBy = 'rank', direction = 'asc') {
+  const list = Array.isArray(findings) ? findings : [];
+  const sign = direction === 'asc' ? 1 : -1;
+  const text = (value) =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase();
+  const valueOf = (finding) => {
+    if (sortBy === 'severity') return SEVERITY_SORT_ORDER[text(findingSeverity(finding))] || 0;
+    if (sortBy === 'poc') return findingHasPoc(finding) ? 1 : 0;
+    if (sortBy === 'rating') return findingRating(finding);
+    if (sortBy === 'type') return text(finding?.vulnerability_type);
+    if (sortBy === 'actor') return text(finding?.malicious_actor);
+    return Number.isFinite(Number(finding?.rank)) ? Number(finding.rank) : Number.MAX_SAFE_INTEGER;
+  };
+  return list
+    .map((finding, index) => ({ finding, index, value: valueOf(finding) }))
+    .sort((left, right) => {
+      if (typeof left.value === 'string' || typeof right.value === 'string') {
+        const comparison = String(left.value).localeCompare(String(right.value));
+        return comparison * sign || left.index - right.index;
+      }
+      return (left.value - right.value) * sign || left.index - right.index;
+    })
+    .map(({ finding }) => finding);
+}
+
 export function supplementalFindingRunSummary(finding, runs = []) {
   const runIds = new Set(
     (finding?.enrichments || [])
@@ -141,6 +205,7 @@ export default function ScanDetail() {
   const [supplementalRetry, setSupplementalRetry] = useState(null);
   const [supplementalRetrySubmitting, setSupplementalRetrySubmitting] = useState(false);
   const [supplementalRetryError, setSupplementalRetryError] = useState(null);
+  const [findingSort, setFindingSort] = useState({ by: 'rank', direction: 'asc' });
   const reviewMutations = useRef(createLatestFieldMutationQueue());
   const { data: scan, loading, error, reload } = useFetch(() => api.scan(id), [id], { pollMs: 1000 });
   const {
@@ -200,7 +265,14 @@ export default function ScanDetail() {
     setSupplementalRetryError(null);
   }, [id]);
 
-  const findingPages = usePagination(vulns || [], { pageSize: 20, resetKey: id });
+  const sortedFindings = useMemo(
+    () => sortFindings(vulns || [], findingSort.by, findingSort.direction),
+    [vulns, findingSort]
+  );
+  const findingPages = usePagination(sortedFindings, {
+    pageSize: 20,
+    resetKey: `${id}:${findingSort.by}:${findingSort.direction}`,
+  });
 
   const setStatus = async (status) => {
     setBusy(true);
@@ -682,6 +754,8 @@ export default function ScanDetail() {
 
         <ScanStatusPanel scan={scan} />
 
+        <ScanGraphPanel scanId={scan.id} active={GRAPH_LIVE_STATUSES.includes(scan.status)} />
+
         {agentSkills.length > 0 && <ConfiguredAgentSkills agentSkills={agentSkills} />}
 
         {extraEntries.length > 0 && (
@@ -959,17 +1033,65 @@ export default function ScanDetail() {
                   'Finding'
                 )}
               </span>
-              <span
+              <label
                 className="mono"
                 style={{
                   fontSize: 10,
                   letterSpacing: '0.05em',
                   color: 'var(--text-3)',
                   textTransform: 'uppercase',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
                 }}
               >
-                Severity
-              </span>
+                <span>Severity</span>
+                <span style={{ textTransform: 'none', fontSize: 9 }}>Sort</span>
+                <select
+                  value={findingSort.by}
+                  onChange={(event) =>
+                    setFindingSort({
+                      by: event.target.value,
+                      direction: event.target.value === 'rank' ? 'asc' : 'desc',
+                    })
+                  }
+                  aria-label="Sort findings by"
+                  style={{
+                    font: 'inherit',
+                    color: 'var(--text-2)',
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    textTransform: 'none',
+                  }}
+                >
+                  {FINDING_SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFindingSort((current) => ({
+                      ...current,
+                      direction: current.direction === 'asc' ? 'desc' : 'asc',
+                    }))
+                  }
+                  aria-label={`Sort ${findingSort.direction === 'asc' ? 'descending' : 'ascending'}`}
+                  style={{
+                    border: 0,
+                    background: 'transparent',
+                    color: 'var(--text-2)',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    padding: 0,
+                  }}
+                >
+                  {findingSort.direction === 'asc' ? '↑' : '↓'}
+                </button>
+              </label>
               <span
                 className="mono"
                 style={{
