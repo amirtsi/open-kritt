@@ -89,14 +89,15 @@ def normalize_output_format(raw: Any) -> dict[str, str | dict[str, Any]]:
 
 
 def _count_definitions(definition: Any) -> int:
+    """Count declared ``fields`` entries across the whole descriptor (the cap is on fields)."""
     if not isinstance(definition, dict):
-        return 1
-    total = 1
+        return 0
+    total = 0
     if "items" in definition:
         total += _count_definitions(definition["items"])
     fields = definition.get("fields")
     if isinstance(fields, dict):
-        total += sum(_count_definitions(field) for field in fields.values())
+        total += len(fields) + sum(_count_definitions(field) for field in fields.values())
     return total
 
 
@@ -157,6 +158,8 @@ def _validate_definition(path: str, definition: Any, depth: int, errors: list[st
         if required is not None:
             if not isinstance(required, list) or any(not isinstance(name, str) for name in required):
                 errors.append(f"{path}.required: required must be an array of field names")
+            elif len(set(required)) != len(required):
+                errors.append(f"{path}.required: required lists the same field more than once")
             else:
                 for name in required:
                     if name not in fields:

@@ -119,12 +119,13 @@ export function validateFieldDefinition(path, value) {
 
 function walkDefinition(path, value, depth, counter, push) {
   const label = path.split('.').pop();
-  if (depth > MAX_DESCRIPTOR_DEPTH) {
-    push(path, `Exceeds the maximum nesting depth of ${MAX_DESCRIPTOR_DEPTH}.`);
-    return;
-  }
   if (typeof value === 'string') {
     if (!FIELD_TYPES.includes(value)) push(path, `"${label}" has an unsupported type "${value}".`);
+    return;
+  }
+  // Only descriptor objects count towards the depth cap; a leaf type name does not.
+  if (depth > MAX_DESCRIPTOR_DEPTH) {
+    push(path, `Exceeds the maximum nesting depth of ${MAX_DESCRIPTOR_DEPTH}.`);
     return;
   }
   if (!isPlainObject(value)) {
@@ -183,6 +184,9 @@ function walkDefinition(path, value, depth, counter, push) {
         if (!Array.isArray(required) || required.some((entry) => typeof entry !== 'string')) {
           push(`${path}.required`, '"required" must be an array of field names.');
         } else {
+          if (new Set(required).size !== required.length) {
+            push(`${path}.required`, '"required" lists the same field more than once.');
+          }
           const unknown = required.filter((entry) => !Object.hasOwn(fields, entry));
           if (unknown.length) {
             push(`${path}.required`, `"required" names undeclared field(s): ${unknown.join(', ')}.`);
