@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useFetch } from '../lib/useFetch.js';
+import { investigationSummary } from '../lib/investigationKind.js';
 import { usePageChrome } from '../context/ui.jsx';
 import { CardLinkOverlay, Spinner, ErrorState, StatusBadge, Button } from '../components/ui.jsx';
 import LinkifiedText from '../components/LinkifiedText.jsx';
@@ -1929,6 +1930,7 @@ function ScanRunSettings({
             label="model jobs"
             value={`${scan.jobsStarted || 0} / ${scan.jobLimit == null ? 'unlimited' : scan.jobLimit}`}
           />
+          <RuntimeSetting label="investigation" value={investigationSummary(scan.configuration).text} />
         </div>
       )}
     </div>
