@@ -382,9 +382,12 @@ export async function listSupplementalPostScriptRuns(db, scanId) {
   return runs.map((run) => serializeSupplementalPostScriptRun(run, byRun.get(run.id.toString()) || []));
 }
 
+// `scan` (the owning scan row, with its configuration) lets the serializer
+// resolve v2.7 pipeline stages and readiness; without it findings carry no
+// readiness decision.
 export async function serializedScanVulnerabilities(
   scanId,
-  { includeDuplicates = false, maxFindings = null, maxRelatedRecords = null, db = prisma } = {}
+  { includeDuplicates = false, maxFindings = null, maxRelatedRecords = null, scan = null, db = prisma } = {}
 ) {
   const bounded = Number.isSafeInteger(maxFindings) && maxFindings > 0;
   const relatedBounded = Number.isSafeInteger(maxRelatedRecords) && maxRelatedRecords > 0;
@@ -438,6 +441,7 @@ export async function serializedScanVulnerabilities(
     serializeVulnerability(vulnerability, {
       enrichments: enrichmentsByVulnerability.get(vulnerability.id.toString()) || [],
       duplicateIds: duplicateIdsByCanonical.get(vulnerability.id.toString()) || [],
+      scan,
     })
   );
 }
@@ -774,7 +778,7 @@ router.get('/:id/vulnerabilities', async (req, res, next) => {
     const scan = await prisma.scan.findUnique({ where: { id } });
     if (!scan) return res.status(404).json({ error: 'Scan not found.' });
     const includeDuplicates = req.query.includeDuplicates === '1' || req.query.includeDuplicates === 'true';
-    res.json(await serializedScanVulnerabilities(id, { includeDuplicates }));
+    res.json(await serializedScanVulnerabilities(id, { includeDuplicates, scan }));
   } catch (e) {
     next(e);
   }
@@ -863,6 +867,7 @@ router.get('/:id/export', async (req, res, next) => {
           repoKind: true,
           workflowId: true,
           postScriptId: true,
+          configuration: true,
           insertedAt: true,
           updatedAt: true,
         },
@@ -902,6 +907,7 @@ router.get('/:id/export', async (req, res, next) => {
         serializedScanVulnerabilities(id, {
           maxFindings: MAX_FINDING_EXPORT_FINDINGS,
           maxRelatedRecords: MAX_FINDING_EXPORT_RELATED_RECORDS,
+          scan,
         }),
       ]);
       const exportScan = {
