@@ -78,6 +78,16 @@ def test_ollama_harness_uses_explicit_environment_without_ambient_fallback(tmp_p
     assert observed == ["http://host.docker.internal:11435"]
 
 
+def test_ollama_search_falls_back_when_ripgrep_is_unavailable(tmp_path, monkeypatch):
+    (tmp_path / "contract.sol").write_text("contract Safe {}\ncontract Target {}\n", encoding="utf-8")
+    harness = OllamaHarness(timeout_seconds=5)
+    monkeypatch.setattr("open_kritt_engine.harnesses.shutil.which", lambda _name: None)
+
+    result = harness._tool(str(tmp_path), "search_text", {"pattern": "Target", "path": "."})
+
+    assert result == "contract.sol:2:contract Target {}"
+
+
 def test_harness_factory_supports_ollama():
     harness = harness_for("ollama", timeout_seconds=5, model_provider="ollama")
     assert isinstance(harness, OllamaHarness)

@@ -2244,6 +2244,33 @@ class OllamaHarness:
             if not pattern or len(pattern) > 500:
                 return "error: pattern is empty or too long"
             target = self._safe_path(repo_dir, relative)
+            if shutil.which("rg") is None:
+                try:
+                    matcher = re.compile(pattern)
+                except re.error as exc:
+                    return f"error: invalid search pattern: {exc}"
+                candidates = [target] if target.is_file() else target.rglob("*")
+                root = Path(repo_dir).resolve()
+                matches = []
+                inspected = 0
+                for path in candidates:
+                    if not path.is_file() or ".git" in path.parts:
+                        continue
+                    inspected += 1
+                    if inspected > 1000:
+                        break
+                    try:
+                        if path.stat().st_size > self.max_file_bytes:
+                            continue
+                        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    except OSError:
+                        continue
+                    for line_number, line in enumerate(lines, 1):
+                        if matcher.search(line):
+                            matches.append(f"{path.relative_to(root)}:{line_number}:{line}")
+                            if sum(len(item) + 1 for item in matches) >= self.max_tool_output:
+                                return "\n".join(matches)[: self.max_tool_output]
+                return "\n".join(matches)[: self.max_tool_output] or "no matches"
             proc = subprocess.run(
                 ["rg", "-n", "--no-heading", "--color", "never", "--", pattern, str(target)],
                 cwd=repo_dir,
