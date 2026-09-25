@@ -88,6 +88,49 @@ def test_ollama_search_falls_back_when_ripgrep_is_unavailable(tmp_path, monkeypa
     assert result == "contract.sol:2:contract Target {}"
 
 
+def test_ollama_harness_repairs_schema_invalid_final_output(tmp_path, monkeypatch):
+    replies = iter(
+        [
+            {"message": {"content": '{"results":[{"summary":"missing path"}]}' }},
+            {"message": {"content": '{"results":[{"summary":"fixed","lane_file_path":"contract.sol"}]}' }},
+        ]
+    )
+    observed = []
+    harness = OllamaHarness(timeout_seconds=5)
+
+    def fake_chat(_base_url, payload, _timeout_seconds=None):
+        observed.append(payload)
+        return next(replies)
+
+    monkeypatch.setattr(harness, "_chat", fake_chat)
+    result = harness.run(
+        prompt="Return the result.",
+        schema={
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string"},
+                            "lane_file_path": {"type": "string"},
+                        },
+                        "required": ["summary", "lane_file_path"],
+                    },
+                }
+            },
+            "required": ["results"],
+        },
+        repo_dir=str(tmp_path),
+        model="gemma4:e4b-it-qat",
+        allow_tools=False,
+    )
+
+    assert result.payload["results"][0]["lane_file_path"] == "contract.sol"
+    assert "lane_file_path" in observed[1]["messages"][-1]["content"]
+
+
 def test_harness_factory_supports_ollama():
     harness = harness_for("ollama", timeout_seconds=5, model_provider="ollama")
     assert isinstance(harness, OllamaHarness)

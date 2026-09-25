@@ -2374,6 +2374,27 @@ class OllamaHarness:
                 messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{output}\nContinue with one JSON action or the final object."})
                 continue
             payload = candidate.get("final") if isinstance(candidate.get("final"), dict) else candidate
+            validation_errors = sorted(
+                Draft202012Validator(schema).iter_errors(payload),
+                key=lambda error: [str(part) for part in error.absolute_path],
+            )
+            if validation_errors:
+                details = []
+                for error in validation_errors[:8]:
+                    path = ".".join(str(part) for part in error.absolute_path) or "$"
+                    details.append(f"{path}: {error.message}")
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "The proposed final object does not satisfy the required schema. Correct every error and "
+                            "return the complete final JSON object with all required properties. Errors:\n"
+                            + "\n".join(details)
+                        ),
+                    }
+                )
+                continue
             return HarnessResult(
                 payload=payload,
                 usage={"model_provider": "ollama", "local": True, **totals},
