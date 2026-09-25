@@ -52,7 +52,7 @@ POST_SCRIPT_MARKDOWN_OUTPUT_KEYS = frozenset({"_reserved_report", "_reserved_poc
 POST_SCRIPT_CHIP_PREFIX = "_chip_"
 WORKFLOW_FIELD_TYPES = FIELD_TYPES
 POST_SCRIPT_FIELD_TYPES = WORKFLOW_FIELD_TYPES
-MODEL_PROVIDERS = frozenset({"codex", "claude", "openrouter", "omniroute", "xai", "deepseek"})
+MODEL_PROVIDERS = frozenset({"codex", "claude", "openrouter", "omniroute", "xai", "deepseek", "ollama"})
 THINKING_EFFORTS = frozenset({"default", "low", "medium", "high", "xhigh", "max", "ultra"})
 GENERATION_REQUEST_MAX_LENGTH = 20_000
 MODEL_ID_MAX_LENGTH = 200
@@ -68,11 +68,13 @@ MODEL_PROVIDER_HARNESSES = {
     "omniroute": frozenset({"codex", "claude-code"}),
     "xai": frozenset({"grok-build"}),
     "deepseek": frozenset({"codex"}),
+    "ollama": frozenset({"ollama"}),
 }
 HARNESS_THINKING_EFFORTS = {
     "codex": frozenset({"default", "low", "medium", "high", "xhigh", "max", "ultra"}),
     "claude-code": frozenset({"default", "low", "medium", "high", "xhigh", "max"}),
     "grok-build": frozenset({"low", "medium", "high", "xhigh"}),
+    "ollama": frozenset({"default"}),
 }
 
 IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -110,6 +112,7 @@ GENERATION_PROVIDER_ENV_KEYS = {
     "omniroute": frozenset({"OMNIROUTE_API_KEY", "OMNIROUTE_BASE_URL"}),
     "xai": frozenset({"XAI_API_KEY", "GROK_BIN", "GROK_HOME"}),
     "deepseek": frozenset({"DEEPSEEK_API_KEY"}),
+    "ollama": frozenset({"OLLAMA_BASE_URL"}),
 }
 
 

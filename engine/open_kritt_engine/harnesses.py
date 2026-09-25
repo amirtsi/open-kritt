@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from jsonschema import Draft202012Validator
 
@@ -204,7 +206,7 @@ CLAUDE_MODEL_ALIASES = {
     "opus-4.8": "claude-opus-4-8",
 }
 DEFAULT_MODEL_PROVIDER = "openrouter"
-MODEL_PROVIDERS = {"codex", "claude", "openrouter", "omniroute", "xai", "deepseek"}
+MODEL_PROVIDERS = {"codex", "claude", "openrouter", "omniroute", "xai", "deepseek", "ollama"}
 GROK_BUILD_THINKING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 DEFAULT_GROK_BUILD_MODEL = "grok-4.6"
 GROK_BUILD_RUNTIME_ENV = {
@@ -2162,6 +2164,202 @@ def _cursor_model_name(model: str, model_provider: str | None = None, thinking_e
     return model
 
 
+class OllamaHarness:
+    """Small, bounded repository agent for local Ollama models.
+
+    Some local Qwen templates emit tool calls as text instead of native API
+    tool_calls.  This harness deliberately accepts that representation, but
+    only exposes read-only repository operations.  It never executes model-
+    supplied shell commands or permits paths outside the prepared workspace.
+    """
+
+    name = "ollama"
+    max_turns = 24
+    max_tool_output = 20_000
+    max_file_bytes = 2 * 1024 * 1024
+
+    def __init__(self, timeout_seconds: int, model_provider: str | None = None, **_kwargs):
+        self.timeout_seconds = timeout_seconds
+        self.model_provider = model_provider
+
+    @staticmethod
+    def _safe_path(repo_dir: str, value: Any) -> Path:
+        root = Path(repo_dir).resolve()
+        raw = str(value or "").strip()
+        if not raw or "\x00" in raw:
+            raise HarnessError("Ollama requested an invalid repository path.", code="invalid_request", harness="ollama")
+        candidate = (root / raw).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise HarnessError("Ollama requested a path outside the repository.", code="invalid_request", harness="ollama") from exc
+        return candidate
+
+    @staticmethod
+    def _json_candidate(text: str) -> dict[str, Any]:
+        cleaned = text.strip()
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+        tag = re.search(r"<(tool_call|xml)>\s*(\{.*?\})\s*</\1>", cleaned, re.DOTALL)
+        if tag:
+            cleaned = tag.group(2)
+        try:
+            value = json.loads(cleaned)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if not match:
+                raise
+            value = json.loads(match.group(0))
+        if not isinstance(value, dict):
+            raise json.JSONDecodeError("expected object", cleaned, 0)
+        return value
+
+    def _tool(self, repo_dir: str, name: str, arguments: dict[str, Any]) -> str:
+        if name == "read_file":
+            path = self._safe_path(repo_dir, arguments.get("path"))
+            if not path.is_file():
+                return f"error: file not found: {arguments.get('path')}"
+            if path.stat().st_size > self.max_file_bytes:
+                return f"error: file is larger than {self.max_file_bytes} bytes"
+            start = max(1, int(arguments.get("start_line") or 1))
+            count = min(500, max(1, int(arguments.get("line_count") or 200)))
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            return "\n".join(f"{index}: {line}" for index, line in enumerate(lines[start - 1 : start - 1 + count], start))[
+                : self.max_tool_output
+            ]
+        if name == "list_files":
+            relative = str(arguments.get("path") or ".")
+            directory = self._safe_path(repo_dir, relative)
+            if not directory.is_dir():
+                return f"error: directory not found: {relative}"
+            files = []
+            for path in directory.rglob("*"):
+                if path.is_file() and ".git" not in path.parts:
+                    files.append(str(path.relative_to(Path(repo_dir).resolve())))
+                if len(files) >= 1000:
+                    break
+            return "\n".join(files)[: self.max_tool_output]
+        if name == "search_text":
+            pattern = str(arguments.get("pattern") or "")
+            relative = str(arguments.get("path") or ".")
+            if not pattern or len(pattern) > 500:
+                return "error: pattern is empty or too long"
+            target = self._safe_path(repo_dir, relative)
+            proc = subprocess.run(
+                ["rg", "-n", "--no-heading", "--color", "never", "--", pattern, str(target)],
+                cwd=repo_dir,
+                text=True,
+                capture_output=True,
+                timeout=min(30, self.timeout_seconds),
+                check=False,
+            )
+            return (proc.stdout or proc.stderr or "no matches")[: self.max_tool_output]
+        return f"error: unsupported tool {name!r}; use read_file, list_files, or search_text"
+
+    def _chat(self, base_url: str, payload: dict[str, Any], timeout_seconds: float | None = None) -> dict[str, Any]:
+        request = Request(
+            f"{base_url.rstrip('/')}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:
+                body = response.read(5 * 1024 * 1024)
+        except HTTPError as exc:
+            raise HarnessError(f"Ollama rejected the request with HTTP {exc.code}.", code="provider_rejected", harness="ollama") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise HarnessError("The engine could not reach Ollama.", code="network_error", harness="ollama") from exc
+        try:
+            result = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise HarnessError("Ollama returned invalid JSON.", code="invalid_output", harness="ollama") from exc
+        if not isinstance(result, dict):
+            raise HarnessError("Ollama returned an invalid response.", code="invalid_output", harness="ollama")
+        return result
+
+    def run(
+        self,
+        *,
+        prompt: str,
+        schema: dict[str, Any],
+        repo_dir: str,
+        model: str,
+        thinking_effort: str | None = None,
+        env: dict[str, str] | None = None,
+        allow_tools: bool = True,
+        runner_image: str | None = None,
+    ) -> HarnessResult:
+        del thinking_effort, runner_image
+        actual_env = env if env is not None else os.environ
+        base_url = actual_env.get("OLLAMA_BASE_URL") or "http://host.docker.internal:11435"
+        tools = (
+            "Use one action at a time as JSON: "
+            '{"name":"read_file","arguments":{"path":"relative/file","start_line":1,"line_count":200}}, '
+            '{"name":"list_files","arguments":{"path":"relative/dir"}}, or '
+            '{"name":"search_text","arguments":{"pattern":"literal or regex","path":"relative/dir"}}. '
+            "Never emit shell commands. When finished, return the requested result object directly, with no markdown."
+            if allow_tools
+            else "Return the requested result object directly, with no markdown."
+        )
+        system = (
+            "You are a repository security investigator. Work only inside the supplied repository. "
+            f"{tools}\nThe final JSON must satisfy this schema:\n{json.dumps(schema, separators=(',', ':'))}"
+        )
+        messages: list[dict[str, str]] = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        totals = {"prompt_eval_count": 0, "eval_count": 0}
+        transcript: list[str] = []
+        deadline = time.monotonic() + self.timeout_seconds
+        for _turn in range(self.max_turns):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HarnessError(
+                    "Ollama exhausted the generation timeout.",
+                    code="timeout",
+                    harness="ollama",
+                    output=HarnessOutput(stdout="\n".join(transcript)),
+                )
+            result = self._chat(
+                base_url,
+                {
+                    "model": model,
+                    "stream": False,
+                    "messages": messages,
+                    "options": {"temperature": 0, "num_ctx": 32768},
+                },
+                remaining,
+            )
+            for key in totals:
+                totals[key] += int(result.get(key) or 0)
+            message = result.get("message") if isinstance(result.get("message"), dict) else {}
+            content = str(message.get("content") or "").strip()
+            transcript.append(content)
+            try:
+                candidate = self._json_candidate(content)
+            except json.JSONDecodeError:
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "Invalid response. Return exactly one JSON tool action or the final schema object."})
+                continue
+            tool_name = candidate.get("name")
+            arguments = candidate.get("arguments")
+            if allow_tools and isinstance(tool_name, str) and isinstance(arguments, dict):
+                output = self._tool(repo_dir, tool_name, arguments)
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{output}\nContinue with one JSON action or the final object."})
+                continue
+            payload = candidate.get("final") if isinstance(candidate.get("final"), dict) else candidate
+            return HarnessResult(
+                payload=payload,
+                usage={"model_provider": "ollama", "local": True, **totals},
+                output=HarnessOutput(stdout="\n".join(transcript)),
+            )
+        raise HarnessError(
+            "Ollama exhausted the bounded tool loop without a final structured response.",
+            code="invalid_output",
+            harness="ollama",
+            output=HarnessOutput(stdout="\n".join(transcript)),
+        )
+
+
 class CursorHarness:
     name = "cursor"
 
@@ -2483,4 +2681,6 @@ def harness_for(
             runner_memory_mb=runner_memory_mb,
             runner_memory_reservation_mb=runner_memory_reservation_mb,
         )
+    if normalized == "ollama":
+        return OllamaHarness(timeout_seconds, model_provider=provider)
     raise HarnessError(f"unsupported harness {name!r}")

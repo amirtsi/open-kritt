@@ -1,4 +1,4 @@
-export const MODEL_PROVIDER_IDS = ['codex', 'claude', 'openrouter', 'omniroute', 'xai', 'deepseek'];
+export const MODEL_PROVIDER_IDS = ['codex', 'claude', 'openrouter', 'omniroute', 'xai', 'deepseek', 'ollama'];
 export const MODEL_CATALOG_STATUSES = ['ready', 'loading', 'unavailable'];
 const SAFE_MODEL_NOTE_URLS = new Set(['https://chatgpt.com/cyber']);
 
@@ -11,6 +11,7 @@ const PROVIDER_HARNESSES = {
   omniroute: ['claude-code', 'codex'],
   xai: ['grok-build'],
   deepseek: ['codex'],
+  ollama: ['ollama'],
 };
 
 const PROVIDER_DEFAULT_MODELS = {
@@ -20,6 +21,7 @@ const PROVIDER_DEFAULT_MODELS = {
   omniroute: 'auto',
   xai: 'grok-4.6',
   deepseek: 'deepseek-flash',
+  ollama: 'qwen2.5-coder:7b-instruct',
 };
 
 const PROVIDER_THINKING_EFFORTS = {
@@ -29,12 +31,14 @@ const PROVIDER_THINKING_EFFORTS = {
   omniroute: ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
   xai: ['low', 'medium', 'high', 'xhigh'],
   deepseek: ['low', 'high', 'max'],
+  ollama: ['default'],
 };
 
 const HARNESS_THINKING_EFFORTS = {
   codex: ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'claude-code': ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
   'grok-build': ['low', 'medium', 'high', 'xhigh'],
+  ollama: ['default'],
 };
 
 function normalizedProviderId(provider) {
@@ -122,7 +126,10 @@ export function usesFreeTextModelInput(catalog, provider) {
   return (
     providerCatalog?.input === 'text' ||
     (!providerCatalog &&
-      (normalizedProvider === 'openrouter' || normalizedProvider === 'omniroute' || normalizedProvider === 'xai'))
+      (normalizedProvider === 'openrouter' ||
+        normalizedProvider === 'omniroute' ||
+        normalizedProvider === 'xai' ||
+        normalizedProvider === 'ollama'))
   );
 }
 

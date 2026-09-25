@@ -562,6 +562,7 @@ class Worker:
                 "openrouter": {"codex", "claude-code"},
                 "omniroute": {"codex", "claude-code"},
                 "xai": {"grok-build"},
+                "ollama": {"ollama"},
             }
             if harness not in compatible.get(provider, set()):
                 continue

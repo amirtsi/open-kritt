@@ -114,6 +114,22 @@ export function modelCatalogModels(catalog) {
 
 export function modelCatalogEntry(provider, catalog) {
   const models = modelCatalogModels(catalog);
+  if (provider === 'ollama' && !models.length) {
+    return {
+      provider,
+      input: 'text',
+      models: [
+        {
+          id: 'qwen2.5-coder:7b-instruct',
+          label: 'Qwen 2.5 Coder 7B (local)',
+          thinkingEfforts: ['default'],
+          isDefault: true,
+        },
+      ],
+      defaultModel: 'qwen2.5-coder:7b-instruct',
+      status: 'ready',
+    };
+  }
   if (provider === 'omniroute' && !models.length) {
     return {
       provider,
@@ -166,7 +182,7 @@ export function modelCatalogEntry(provider, catalog) {
   const status = models.length > 0 && !defaultIsMissing ? 'ready' : hasText(lastError) ? 'unavailable' : 'loading';
   return {
     provider,
-    input: provider === 'openrouter' || provider === 'omniroute' || provider === 'xai' ? 'text' : 'select',
+    input: provider === 'openrouter' || provider === 'omniroute' || provider === 'xai' || provider === 'ollama' ? 'text' : 'select',
     models,
     defaultModel,
     status,

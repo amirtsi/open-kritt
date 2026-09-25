@@ -5,6 +5,7 @@ export const PROVIDER_LABELS = {
   omniroute: 'OmniRoute',
   xai: 'xAI',
   deepseek: 'DeepSeek',
+  ollama: 'Ollama (local)',
 };
 
 export const DEFAULT_VISIBLE_PROVIDERS = Object.keys(PROVIDER_LABELS);
