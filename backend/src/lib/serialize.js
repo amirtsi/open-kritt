@@ -7,7 +7,7 @@ import {
   GENERATION_REQUEST_MAX_LENGTH,
 } from './constants.js';
 import { validateGeneratedPostScript, validateGeneratedWorkflow, ValidationError } from './validation.js';
-import { READINESS_POLICY_VERSION, V27_WORKFLOW_NAME } from './v27Pipeline.js';
+import { READINESS_POLICY_VERSION, V27_GATED_WORKFLOW_NAMES } from './v27Pipeline.js';
 import { findingReadiness, findingStageResults, stageForEnrichment, withEngineBlocks } from './impactReadiness.js';
 
 // "2h ago" style relative time from a Date.
@@ -77,7 +77,7 @@ export function serializeWorkflow(workflow, steps, { scanCount = 0, lastUsed = n
     steps: serializedSteps,
     // The engine-enforced readiness gate (spec 4.2). The UI keys every
     // gate-specific behaviour on this field; null means no gate runs.
-    readinessGate: workflow.name === V27_WORKFLOW_NAME ? READINESS_POLICY_VERSION : null,
+    readinessGate: V27_GATED_WORKFLOW_NAMES.includes(workflow.name) ? READINESS_POLICY_VERSION : null,
     scanCount,
     lastUsed,
     isDefault,
