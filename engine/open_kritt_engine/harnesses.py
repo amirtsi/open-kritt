@@ -2215,6 +2215,10 @@ class OllamaHarness:
 
     name = "ollama"
     max_turns = 24
+    # Small local models often return an empty stub on the first turn without
+    # reading anything. A "nothing found" answer only counts after this many
+    # repository actions.
+    min_actions_before_stub = 2
     max_tool_output = 20_000
     max_file_bytes = 2 * 1024 * 1024
 
@@ -2430,6 +2434,7 @@ class OllamaHarness:
         messages: list[dict[str, str]] = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         totals = {"prompt_eval_count": 0, "eval_count": 0}
         transcript: list[str] = []
+        tool_actions = 0
         deadline = time.monotonic() + self.timeout_seconds
         for _turn in range(self.max_turns):
             remaining = deadline - time.monotonic()
@@ -2465,10 +2470,24 @@ class OllamaHarness:
             arguments = candidate.get("arguments")
             if allow_tools and isinstance(tool_name, str) and isinstance(arguments, dict):
                 output = self._tool(repo_dir, tool_name, arguments)
+                tool_actions += 1
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{output}\nContinue with one JSON action or the final object."})
                 continue
             payload = candidate.get("final") if isinstance(candidate.get("final"), dict) else candidate
+            if allow_tools and payload.get("stub") is True and tool_actions < self.min_actions_before_stub:
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You returned a no-finding stub without inspecting the repository. Use list_files, "
+                            "search_text, and read_file to examine the relevant source before concluding. "
+                            "Continue with one JSON action."
+                        ),
+                    }
+                )
+                continue
             validation_errors = sorted(
                 Draft202012Validator(schema).iter_errors(payload),
                 key=lambda error: [str(part) for part in error.absolute_path],

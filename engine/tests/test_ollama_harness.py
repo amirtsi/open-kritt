@@ -49,6 +49,55 @@ def test_ollama_harness_parses_text_tool_calls_and_returns_final_payload(tmp_pat
     assert "github.com/example/repo" in observed[1]["messages"][-1]["content"]
 
 
+STUB_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stub": {"type": "boolean"},
+        "stub_explanation": {"type": "string"},
+        "results": {"type": "array"},
+    },
+    "required": ["stub", "stub_explanation", "results"],
+}
+STUB_REPLY = {"message": {"content": json.dumps({"stub": True, "stub_explanation": "none", "results": []})}}
+
+
+def test_ollama_harness_requires_repository_actions_before_accepting_stub(tmp_path, monkeypatch):
+    (tmp_path / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
+    replies = iter(
+        [
+            STUB_REPLY,
+            {"message": {"content": '{"name":"list_files","arguments":{"path":"."}}'}},
+            STUB_REPLY,
+            {"message": {"content": '{"name":"read_file","arguments":{"path":"Vault.sol"}}'}},
+            STUB_REPLY,
+        ]
+    )
+    observed = []
+    harness = OllamaHarness(timeout_seconds=5)
+
+    def fake_chat(_base_url, payload, _timeout_seconds=None):
+        observed.append(payload["messages"][-1]["content"])
+        return next(replies)
+
+    monkeypatch.setattr(harness, "_chat", fake_chat)
+    result = harness.run(prompt="Map entrypoints.", schema=STUB_SCHEMA, repo_dir=str(tmp_path), model="qwen")
+
+    assert result.payload["stub"] is True
+    assert len(observed) == 5
+    assert "without inspecting the repository" in observed[1]
+    assert "without inspecting the repository" in observed[3]
+    assert "Tool result for read_file" in observed[4]
+
+
+def test_ollama_harness_accepts_immediate_stub_when_tools_are_disabled(tmp_path, monkeypatch):
+    harness = OllamaHarness(timeout_seconds=5)
+    monkeypatch.setattr(harness, "_chat", lambda *_args, **_kwargs: STUB_REPLY)
+    result = harness.run(
+        prompt="Summarize.", schema=STUB_SCHEMA, repo_dir=str(tmp_path), model="qwen", allow_tools=False
+    )
+    assert result.payload["stub"] is True
+
+
 def test_ollama_harness_rejects_paths_outside_repository(tmp_path):
     harness = OllamaHarness(timeout_seconds=5)
     with pytest.raises(HarnessError, match="outside the repository"):
