@@ -25,6 +25,7 @@ import { resolveV27Pipeline } from '../lib/v27Pipeline.js';
 import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
 import { selectResearchScans } from '../lib/researchScope.js';
+import { loadScanLive } from '../lib/scanLive.js';
 import {
   createFindingExport,
   createFindingExportLimiter,
@@ -791,6 +792,31 @@ router.get('/:id', async (req, res, next) => {
     next(e);
   }
 });
+
+export function scanLiveHandler({ findScan, load }) {
+  return async (req, res, next) => {
+    try {
+      if (!/^\d+$/.test(`${req.params.id}`)) return res.status(400).json({ error: 'Scan id must be a number.' });
+      const scan = await findScan(BigInt(req.params.id));
+      if (!scan) return res.status(404).json({ error: 'Scan not found.' });
+      res.json(await load(scan));
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
+// GET /api/scans/:id/live: verified-findings funnel, activity, and dropout reasons.
+router.get(
+  '/:id/live',
+  scanLiveHandler({
+    findScan: (id) => prisma.scan.findUnique({ where: { id } }),
+    load: async (scan) => {
+      const assembled = await assembleScan(scan);
+      return loadScanLive(prisma, scan, { activeJobs: assembled.statusSummary?.activeJobs || [], now: new Date() });
+    },
+  })
+);
 
 // GET /api/scans/:id/graph — workflow step nodes, lineage edges, and the
 // post-processing funnel for the scan graph view.
