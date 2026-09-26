@@ -2,7 +2,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildActivity, buildDropouts, buildFunnel, loadScanLive, normalizeStubReason } from '../src/lib/scanLive.js';
+import {
+  buildActivity,
+  buildDropouts,
+  buildFunnel,
+  loadScanLive,
+  normalizeStubReason,
+  verifiedCounts,
+} from '../src/lib/scanLive.js';
 
 const PIPELINE = { d3: '15', d4: '13', d5: '16' };
 const scan = (configuration = { v27_pipeline: PIPELINE }) => ({ id: 26n, status: 'post_processing', configuration });
@@ -274,4 +281,19 @@ test('loadScanLive reads only the needed columns and assembles every section', a
   const metadataCall = calls.find(([name]) => name === 'stepMetadata')[1];
   assert.equal(metadataCall.select.promptFilled, undefined);
   assert.equal(metadataCall.select.stubExplanation, true);
+});
+
+test('verified counts sum kept and impact-proven findings per scan', () => {
+  const counts = verifiedCounts({
+    scan: scan(),
+    vulnerabilities: [vuln(1, true), vuln(2, true)],
+    enrichments: [
+      enrich(1, 15, { verdict: 'confirmed' }),
+      enrich(2, 15, { verdict: 'plausible_needs_poc' }),
+      enrich(1, 13, {
+        _engine_evidence: { bug_status: 'reproduced', impact_status: 'proven', capture_complete: true },
+      }),
+    ],
+  });
+  assert.deepEqual(counts, { kept: 2, impactProven: 1 });
 });

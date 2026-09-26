@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { assembleScans } from '../lib/repo.js';
+import { verifiedCounts } from '../lib/scanLive.js';
 
 const router = Router();
 
@@ -26,6 +27,22 @@ export function scanResearchKey(scan) {
   return `${identity}::${kind}`;
 }
 
+export function summarizeVerifiedFindings(scans, vulnerabilities, enrichments) {
+  let keptCount = 0;
+  let impactProvenCount = 0;
+  for (const scan of scans) {
+    const id = `${scan.id}`;
+    const counts = verifiedCounts({
+      scan,
+      vulnerabilities: vulnerabilities.filter((row) => `${row.scanId}` === id),
+      enrichments: enrichments.filter((row) => `${row.scanId}` === id),
+    });
+    keptCount += counts.kept;
+    impactProvenCount += counts.impactProven;
+  }
+  return { keptCount, impactProvenCount };
+}
+
 // GET /api/overview — KPIs + recent scans for the dashboard.
 router.get('/', async (req, res, next) => {
   try {
@@ -46,10 +63,25 @@ router.get('/', async (req, res, next) => {
     const focusVulns = researchIds.length
       ? await prisma.vulnerability.findMany({
           where: { scanId: { in: researchIds } },
-          select: { jsonAnswer: true, dedupeIsCanonical: true },
+          select: { id: true, scanId: true, jsonAnswer: true, dedupeIsCanonical: true },
+        })
+      : [];
+    const focusEnrichments = researchIds.length
+      ? await prisma.vulnerabilityEnrichment.findMany({
+          where: { scanId: { in: researchIds } },
+          select: {
+            vulnerabilityId: true,
+            scanId: true,
+            postScriptId: true,
+            stub: true,
+            supplementalRunId: true,
+            result: true,
+          },
+          orderBy: { id: 'asc' },
         })
       : [];
     const { findingsCount, exploitableCount } = summarizeCanonicalFindings(focusVulns);
+    const { keptCount, impactProvenCount } = summarizeVerifiedFindings(researchRaw, focusVulns, focusEnrichments);
     const representatives = [];
     const seenResearch = new Set();
     for (const scan of recentRaw) {
@@ -70,6 +102,8 @@ router.get('/', async (req, res, next) => {
       runningCount,
       findingsCount,
       exploitableCount,
+      keptCount,
+      impactProvenCount,
       focusScan: focusScans[0] || null,
       recentScans: researchScans,
       availableScans,

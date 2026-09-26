@@ -342,3 +342,10 @@ export async function loadScanLive(db, scan, { activeJobs = [], now = new Date()
   ]);
   return buildScanLive({ scan, steps, stepMetadata, postMetadata, vulnerabilities, enrichments, activeJobs, now });
 }
+
+export function verifiedCounts({ scan, vulnerabilities, enrichments }) {
+  const stages = Object.fromEntries(
+    buildFunnel({ scan, vulnerabilities, enrichments, postMetadata: [] }).map((stage) => [stage.id, stage.count])
+  );
+  return { kept: stages.d3_kept ?? 0, impactProven: stages.impact_proven ?? 0 };
+}

@@ -5,6 +5,7 @@ import { prisma } from '../db.js';
 import { serializeWorkflow, serializeScan, timeAgo } from './serialize.js';
 import { isDefaultWorkflowName } from './defaultWorkflows.js';
 import { readResourceDiagnostics, resourceFailure, resourceWaitingNotice } from './resourceDiagnostics.js';
+import { verifiedCounts } from './scanLive.js';
 
 const PHASE_LABELS = {
   building_workspace: 'Building workspace',
@@ -90,7 +91,8 @@ export async function assembleWorkflow(workflow) {
 // Raw, listed/canonical, duplicate, and exploitable counts per scan id. The
 // findings endpoint hides duplicates, so `findings` deliberately matches the
 // number of rows a user can open rather than the number of raw candidates.
-export async function findingCountsByScan(scanIds) {
+export async function findingCountsByScan(scans) {
+  const scanIds = scans.map((scan) => scan.id);
   const ids = scanIds.map((x) => BigInt(x));
   const empty = () => ({
     findings: 0,
@@ -99,13 +101,28 @@ export async function findingCountsByScan(scanIds) {
     duplicateFindings: 0,
     unprocessedFindings: 0,
     exploitable: 0,
+    keptFindings: 0,
   });
   const map = new Map(scanIds.map((id) => [id.toString(), empty()]));
   if (ids.length === 0) return map;
-  const vulns = await prisma.vulnerability.findMany({
-    where: { scanId: { in: ids } },
-    select: { scanId: true, jsonAnswer: true, dedupeIsCanonical: true },
-  });
+  const [vulns, enrichments] = await Promise.all([
+    prisma.vulnerability.findMany({
+      where: { scanId: { in: ids } },
+      select: { id: true, scanId: true, jsonAnswer: true, dedupeIsCanonical: true },
+    }),
+    prisma.vulnerabilityEnrichment.findMany({
+      where: { scanId: { in: ids } },
+      select: {
+        vulnerabilityId: true,
+        scanId: true,
+        postScriptId: true,
+        stub: true,
+        supplementalRunId: true,
+        result: true,
+      },
+      orderBy: { id: 'asc' },
+    }),
+  ]);
   for (const v of vulns) {
     const entry = map.get(v.scanId.toString());
     if (!entry) continue;
@@ -119,6 +136,15 @@ export async function findingCountsByScan(scanIds) {
     else entry.unprocessedFindings += 1;
     const ex = v.jsonAnswer && typeof v.jsonAnswer === 'object' ? v.jsonAnswer.exploitable : null;
     if (ex === true || ex === 'true') entry.exploitable += 1;
+  }
+  for (const scan of scans) {
+    const entry = map.get(scan.id.toString());
+    const id = scan.id.toString();
+    entry.keptFindings = verifiedCounts({
+      scan,
+      vulnerabilities: vulns.filter((row) => row.scanId.toString() === id),
+      enrichments: enrichments.filter((row) => row.scanId.toString() === id),
+    }).kept;
   }
   return map;
 }
@@ -852,7 +878,7 @@ export async function assembleScans(scans) {
         licenseSpdx: true,
       },
     }),
-    findingCountsByScan(scans.map((s) => s.id)),
+    findingCountsByScan(scans),
     readResourceDiagnostics(),
     prisma.stepMetadata.findMany({
       where: { scanId: { in: scans.map((scan) => scan.id) }, checkedOutCommit: { not: null } },
@@ -885,6 +911,7 @@ export async function assembleScans(scans) {
       duplicateFindings: 0,
       unprocessedFindings: 0,
       exploitable: 0,
+      keptFindings: 0,
     };
     const statusSummary = statusSummaries.get(s.id.toString());
     const recordedRevision = revisionMap.get(s.id.toString()) || null;
@@ -906,6 +933,7 @@ export async function assembleScans(scans) {
         duplicateFindings: c.duplicateFindings,
         unprocessedFindings: c.unprocessedFindings,
         exploitable: c.exploitable,
+        keptFindings: c.keptFindings,
         progress: prog.progress,
         progressLabel: prog.progressLabel,
         statusSummary,
