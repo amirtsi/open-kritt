@@ -58,6 +58,21 @@ RUN case "${TARGETARCH}" in \
     && rm /tmp/grok \
     && grok --version
 
+# Foundry lets verification stages compile and run Solidity PoCs (forge test,
+# local anvil forks) inside the disposable runner containers.
+ARG FOUNDRY_VERSION=v1.8.3
+RUN case "${TARGETARCH}" in \
+      amd64) foundry_sha256=7ca48e6ca3cac1bce1403ca67e5bc1dc3bc1fd818199c9957c7165079c228568 ;; \
+      arm64) foundry_sha256=93fc23be26c8a902ca58fe54aa6ca28c880b58af95d052674933161df7928e6d ;; \
+      *) echo "unsupported Foundry architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/foundry-rs/foundry/releases/download/${FOUNDRY_VERSION}/foundry_${FOUNDRY_VERSION}_linux_${TARGETARCH}.tar.gz" -o /tmp/foundry.tar.gz \
+    && echo "${foundry_sha256}  /tmp/foundry.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/foundry.tar.gz -C /usr/local/bin forge cast anvil \
+    && rm /tmp/foundry.tar.gz \
+    && forge --version \
+    && anvil --version
+
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
 COPY requirements.txt ./
