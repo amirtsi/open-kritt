@@ -1979,12 +1979,22 @@ class Worker:
                 )
                 if restored:
                     LOGGER.info("restored %s checkout cache entries for scan %s", len(restored), scan_id)
-                prewarm_scan_checkout_cache(
+                prewarmed = prewarm_scan_checkout_cache(
                     checkout_cache_dir=getattr(self.config, "checkout_cache_dir", None),
                     scan=resolved_scan,
                     github_token=getattr(self.config, "github_token", None),
                     data_dir=self.config.data_dir,
                 )
+                primary_commit = prewarmed.get("primary", {}).get("commit")
+                if primary_commit:
+                    with self.db.connect() as conn:
+                        self.db.record_scan_checkout_revisions(
+                            conn,
+                            scan_id,
+                            primary_commit=primary_commit,
+                            dependencies=prewarmed.get("dependencies") or [],
+                        )
+                        conn.commit()
                 saved = save_persistent_scan_checkout_cache(
                     checkout_cache_dir=getattr(self.config, "checkout_cache_dir", None),
                     checkout_cache_persist_dir=getattr(self.config, "checkout_cache_persist_dir", None),

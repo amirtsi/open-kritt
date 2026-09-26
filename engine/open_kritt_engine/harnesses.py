@@ -1591,6 +1591,24 @@ def _extract_json_from_codex_jsonl(
     return None
 
 
+def _codex_jsonl_finished_successfully(stdout: str) -> bool:
+    """Return true only when the final Codex turn terminal event completed."""
+
+    terminal_event = None
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        for candidate in (event.get("type"), payload.get("type")):
+            if candidate in {"turn.completed", "turn.failed"}:
+                terminal_event = candidate
+    return terminal_event == "turn.completed"
+
+
 def _codex_error_diagnostic_text(stdout: str, stderr: str) -> str:
     """Exclude repository command output from provider-error classification."""
 
@@ -1833,7 +1851,29 @@ class CodexHarness:
                     memory_reservation_mb=self.runner_memory_reservation_mb,
                 )
             started_at = time.time()
-            proc = _run_process(cmd, prompt, repo_dir, self.timeout_seconds, env=actual_env)
+            try:
+                proc = _run_process(cmd, prompt, repo_dir, self.timeout_seconds, env=actual_env)
+            except HarnessError as exc:
+                failed_output = exc.output
+                salvageable_payload = (
+                    _extract_json_from_codex_jsonl(failed_output.stdout, schema)
+                    if exc.code in {"harness_failed", "model_process_error"}
+                    and failed_output is not None
+                    and _codex_jsonl_finished_successfully(failed_output.stdout)
+                    else None
+                )
+                if salvageable_payload is None or failed_output is None:
+                    raise
+                # Docker can lose its attach stream while the runner is closing
+                # and return 125/EOF after Codex has already emitted a complete,
+                # schema-valid answer. Preserve that answer and let the normal
+                # output parsing below consume it instead of charging for a retry.
+                proc = subprocess.CompletedProcess(
+                    cmd,
+                    failed_output.returncode if failed_output.returncode is not None else exc.exit_code or 1,
+                    failed_output.stdout,
+                    failed_output.stderr,
+                )
             output_files = {}
             raw_output_file = _read_output_file(output_path)
             if raw_output_file is not None:
@@ -2196,6 +2236,54 @@ class OllamaHarness:
         return candidate
 
     @staticmethod
+    def _repair_truncated_json(text: str) -> str | None:
+        """Close only unmatched JSON containers at end-of-output.
+
+        Local models occasionally emit a complete object but omit one or more
+        final ``}``/``]`` characters.  Repair that narrow case without trying
+        to reinterpret malformed content or invent schema fields.
+        """
+
+        stack: list[str] = []
+        in_string = False
+        escaped = False
+        pairs = {"}": "{", "]": "["}
+        closers = {"{": "}", "[": "]"}
+        repaired: list[str] = []
+        for index, character in enumerate(text):
+            repaired.append(character)
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_string = False
+                continue
+            if character == '"':
+                in_string = True
+            elif character in closers:
+                stack.append(character)
+            elif character in pairs:
+                if not stack:
+                    return None
+                if stack[-1] != pairs[character]:
+                    trailing = text[index:]
+                    if any(item not in "}] \t\r\n" for item in trailing):
+                        return None
+                    inserted: list[str] = []
+                    while stack and stack[-1] != pairs[character]:
+                        inserted.append(closers[stack.pop()])
+                    if not stack:
+                        return None
+                    repaired[-1:-1] = inserted
+                stack.pop()
+        if in_string or not stack:
+            return "".join(repaired) if not in_string and repaired != list(text) else None
+        repaired.extend(closers[character] for character in reversed(stack))
+        return "".join(repaired)
+
+    @staticmethod
     def _json_candidate(text: str) -> dict[str, Any]:
         cleaned = text.strip()
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
@@ -2204,11 +2292,18 @@ class OllamaHarness:
             cleaned = tag.group(2)
         try:
             value = json.loads(cleaned)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as initial_error:
             match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                try:
+                    value = json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    match = None
             if not match:
-                raise
-            value = json.loads(match.group(0))
+                repaired = OllamaHarness._repair_truncated_json(cleaned)
+                if repaired is None:
+                    raise initial_error
+                value = json.loads(repaired)
         if not isinstance(value, dict):
             raise json.JSONDecodeError("expected object", cleaned, 0)
         return value

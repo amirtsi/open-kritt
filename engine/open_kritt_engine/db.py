@@ -370,6 +370,40 @@ class Database:
     def load_scan(self, conn, scan_id: int) -> dict[str, Any] | None:
         return conn.execute("SELECT * FROM public.scans WHERE id = %s", (scan_id,)).fetchone()
 
+    def record_scan_checkout_revisions(
+        self,
+        conn,
+        scan_id: int,
+        *,
+        primary_commit: str,
+        dependencies: list[dict[str, Any]],
+    ) -> None:
+        """Persist the immutable revisions actually materialized for a scan."""
+
+        dependency_detail = [
+            {
+                "kind": dependency.get("kind") or "remote",
+                "repo_full": dependency.get("repo") or "",
+                "commit_sha": dependency.get("commit"),
+            }
+            for dependency in dependencies
+            if dependency.get("repo")
+        ]
+        conn.execute(
+            """
+            UPDATE public.scans
+            SET commit_sha = %(primary_commit)s,
+                dependencies_detail = %(dependencies)s,
+                updated_at = now()
+            WHERE id = %(scan_id)s
+            """,
+            {
+                "scan_id": scan_id,
+                "primary_commit": primary_commit,
+                "dependencies": Jsonb(dependency_detail),
+            },
+        )
+
     def claim_logical_job_slot(
         self,
         conn,

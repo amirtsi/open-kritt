@@ -833,7 +833,7 @@ export async function assembleScans(scans) {
   const workflowIds = [...new Set(scans.map((s) => s.workflowId))];
   const postScriptIds = [...new Set(scans.flatMap((scan) => configuredPostScriptIds(scan)).map((id) => BigInt(id)))];
   const agentSkillIds = [...new Set(scans.flatMap((s) => s.agentSkillIds || []))];
-  const [workflows, postScripts, agentSkills, counts, resources] = await Promise.all([
+  const [workflows, postScripts, agentSkills, counts, resources, resolvedRevisions] = await Promise.all([
     prisma.workflow.findMany({
       where: { id: { in: workflowIds } },
       select: { id: true, name: true, stepIds: true },
@@ -854,10 +854,17 @@ export async function assembleScans(scans) {
     }),
     findingCountsByScan(scans.map((s) => s.id)),
     readResourceDiagnostics(),
+    prisma.stepMetadata.findMany({
+      where: { scanId: { in: scans.map((scan) => scan.id) }, checkedOutCommit: { not: null } },
+      orderBy: [{ scanId: 'asc' }, { updatedAt: 'desc' }, { id: 'desc' }],
+      distinct: ['scanId'],
+      select: { scanId: true, checkedOutCommit: true },
+    }),
   ]);
   const wfMap = new Map(workflows.map((w) => [w.id.toString(), w]));
   const psMap = new Map(postScripts.map((p) => [p.id.toString(), p]));
   const skillMap = new Map(agentSkills.map((skill) => [skill.id.toString(), skill]));
+  const revisionMap = new Map(resolvedRevisions.map((row) => [row.scanId.toString(), row.checkedOutCommit]));
   const stepsMap = await loadStepsMap(workflows.flatMap((w) => w.stepIds || []));
   const statusSummaries = await statusSummariesByScan(scans, stepsMap, wfMap);
 
@@ -880,6 +887,11 @@ export async function assembleScans(scans) {
       exploitable: 0,
     };
     const statusSummary = statusSummaries.get(s.id.toString());
+    const recordedRevision = revisionMap.get(s.id.toString()) || null;
+    const resolvedRevision =
+      (s.repoKind || 'remote') === 'local' && recordedRevision === 'LOCAL_SNAPSHOT'
+        ? s.commitSha || recordedRevision
+        : recordedRevision;
     const prog = await runningProgress(s, statusSummary);
     out.push({
       ...serializeScan(s, {
@@ -897,6 +909,7 @@ export async function assembleScans(scans) {
         progress: prog.progress,
         progressLabel: prog.progressLabel,
         statusSummary,
+        resolvedRevision,
       }),
       resourceNotice: resourceWaitingNotice(s.status, resources),
     });

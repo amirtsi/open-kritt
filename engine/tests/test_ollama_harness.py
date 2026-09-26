@@ -131,6 +131,52 @@ def test_ollama_harness_repairs_schema_invalid_final_output(tmp_path, monkeypatc
     assert "lane_file_path" in observed[1]["messages"][-1]["content"]
 
 
+def test_ollama_harness_repairs_missing_final_container_delimiter(tmp_path, monkeypatch):
+    harness = OllamaHarness(timeout_seconds=5)
+    monkeypatch.setattr(
+        harness,
+        "_chat",
+        lambda *_args, **_kwargs: {
+            "message": {
+                "content": '{"results":[{"summary":"complete model answer"}]}'[:-1],
+            }
+        },
+    )
+
+    result = harness.run(
+        prompt="Return the result.",
+        schema={
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"summary": {"type": "string"}},
+                        "required": ["summary"],
+                    },
+                }
+            },
+            "required": ["results"],
+        },
+        repo_dir=str(tmp_path),
+        model="gemma4:e4b-it-qat",
+        allow_tools=False,
+    )
+
+    assert result.payload == {"results": [{"summary": "complete model answer"}]}
+
+
+def test_ollama_harness_does_not_repair_mismatched_json_delimiters():
+    assert OllamaHarness._repair_truncated_json('{"results":]}') is None
+
+
+def test_ollama_harness_repairs_missing_object_delimiter_before_final_array_close():
+    repaired = OllamaHarness._repair_truncated_json('{"results":[{"summary":"complete"}]}'.replace("}]}", "]}"))
+
+    assert json.loads(repaired) == {"results": [{"summary": "complete"}]}
+
+
 def test_harness_factory_supports_ollama():
     harness = harness_for("ollama", timeout_seconds=5, model_provider="ollama")
     assert isinstance(harness, OllamaHarness)

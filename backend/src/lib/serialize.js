@@ -307,9 +307,17 @@ export function serializeScan(
     progress = null,
     progressLabel = null,
     statusSummary = null,
+    resolvedRevision = null,
   } = {}
 ) {
   const commit = scan.commitSha || '';
+  const revision = resolvedRevision || commit;
+  const snapshotPrefix = 'LOCAL_SNAPSHOT_SHA256:';
+  const revisionShort = revision.startsWith(snapshotPrefix)
+    ? `sha256:${revision.slice(snapshotPrefix.length, snapshotPrefix.length + 12)}`
+    : revision.length > 7
+      ? revision.slice(0, 7)
+      : revision;
   const agentSkillIds = (scan.agentSkillIds || []).map((id) => id.toString());
   const configuration =
     scan.configuration && typeof scan.configuration === 'object' && !Array.isArray(scan.configuration)
@@ -329,6 +337,8 @@ export function serializeScan(
     repoDisplay: repoDisplayName(scan.repoFull, scan.repoKind),
     commitSha: commit,
     commitShort: commit.length > 7 ? commit.slice(0, 7) : commit,
+    resolvedRevision: revision,
+    revisionShort,
     repoScope: scan.repoScope,
     dependencies: serializeDependencies(scan),
     configuration,

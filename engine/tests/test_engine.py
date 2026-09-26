@@ -1257,6 +1257,69 @@ def test_codex_harness_falls_back_to_jsonl_answer(monkeypatch):
     assert result.codex_session_id == "thread-1"
 
 
+def test_codex_harness_salvages_completed_jsonl_after_docker_transport_failure(monkeypatch):
+    payload = marked({"stub": True, "stub_explanation": "No matching records.", "results": []})
+
+    def fake_run_process(*_args, **_kwargs):
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "thread-transport-failure"}),
+                json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(payload)}}),
+                json.dumps({"type": "turn.completed", "usage": {"total_tokens": 7}}),
+            ]
+        )
+        raise HarnessError(
+            "docker attach failed",
+            output=HarnessOutput(stdout=stdout, stderr="error waiting for container: unexpected EOF", returncode=125),
+            code="model_process_error",
+            exit_code=125,
+            harness="codex",
+        )
+
+    monkeypatch.setattr(harnesses, "_run_process", fake_run_process)
+
+    result = CodexHarness(timeout_seconds=5).run(
+        prompt="prompt",
+        schema=output_schema('{"thing":"string"}', multi_output=False),
+        repo_dir="/tmp",
+        model="gpt-test",
+    )
+
+    assert result.payload == payload
+    assert result.codex_session_id == "thread-transport-failure"
+    assert result.usage["total_tokens"] == 7
+    assert result.output.returncode == 125
+
+
+def test_codex_harness_does_not_salvage_jsonl_when_turn_failed(monkeypatch):
+    payload = marked({"stub": True, "stub_explanation": "No matching records.", "results": []})
+
+    def fake_run_process(*_args, **_kwargs):
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(payload)}}),
+                json.dumps({"type": "turn.failed", "error": {"message": "provider disconnected"}}),
+            ]
+        )
+        raise HarnessError(
+            "provider disconnected",
+            output=HarnessOutput(stdout=stdout, stderr="unexpected EOF", returncode=125),
+            code="model_process_error",
+            exit_code=125,
+            harness="codex",
+        )
+
+    monkeypatch.setattr(harnesses, "_run_process", fake_run_process)
+
+    with pytest.raises(HarnessError, match="provider disconnected"):
+        CodexHarness(timeout_seconds=5).run(
+            prompt="prompt",
+            schema=output_schema('{"thing":"string"}', multi_output=False),
+            repo_dir="/tmp",
+            model="gpt-test",
+        )
+
+
 def test_codex_harness_falls_back_to_latest_session_file(monkeypatch, tmp_path):
     codex_home = tmp_path / "home" / ".codex"
     session_dir = codex_home / "sessions" / "2026" / "06" / "29"
@@ -3057,6 +3120,7 @@ def test_worker_records_and_rotates_last_five_model_error_outputs(monkeypatch, t
         db=fake_db,
     )
     worker.runtime_retry_count = lambda: 6
+    worker.runtime_min_free_storage_bytes = lambda: 0
     monkeypatch.setattr(worker_module, "prepare_dependency_workspace", lambda **_kwargs: prepared)
     job = Job(
         step=step(1, 0, multi=False, output_format='{"thing":"string"}'),

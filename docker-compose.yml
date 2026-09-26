@@ -44,6 +44,8 @@ services:
       BACKEND_HOST: 0.0.0.0
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-}
       DATABASE_URL: ${DATABASE_URL:-postgresql://open_kritt:open_kritt_password@db:5432/open_kritt?schema=public}
+      BACKEND_DB_CONNECTION_LIMIT: ${BACKEND_DB_CONNECTION_LIMIT:-5}
+      BACKEND_DB_POOL_TIMEOUT_SECONDS: ${BACKEND_DB_POOL_TIMEOUT_SECONDS:-10}
       # Raw environment keys stay in the engine. The backend receives non-secret
       # presence flags and manages the shared login/key stores used by Accounts.
       OPEN_KRITT_CODEX_API_KEY_CONFIGURED: '${CODEX_API_KEY:+1}'
