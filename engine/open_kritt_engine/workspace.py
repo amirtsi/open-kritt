@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import known_issues as known_issues_module
+from . import static_facts as static_facts_module
 from .account_activity import (
     API_ACCOUNT_KEYS,
     AccountInactiveError,
@@ -525,6 +526,7 @@ def _prepare_dependency_snapshot_workspace(
     repo_dir = Path(workspace.root_dir) / "workspace"
     repo_dir.mkdir(parents=True, exist_ok=True)
     _attach_known_issues(manifest, primary_cache_checkout, repo_dir, cache_dir)
+    _attach_static_facts(manifest, primary_cache_checkout, repo_dir)
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
     layout = workspace_layout(SCAN_RUNNER_WORKDIR, manifest)
     _write_workspace_files(str(repo_dir), manifest, layout, manifest_json)
@@ -644,6 +646,7 @@ def _prepare_dependency_workspace_tree(
     }
     manifest_started = time.perf_counter()
     _attach_known_issues(manifest, repo_dir, repo_dir, cache_dir)
+    _attach_static_facts(manifest, repo_dir, repo_dir)
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
     layout = workspace_layout(repo_dir, manifest)
     _write_workspace_files(repo_dir, manifest, layout, manifest_json)
@@ -1079,6 +1082,14 @@ def workspace_layout(repo_dir: str, manifest: dict[str, Any]) -> str:
             f"target's audit PDFs ({unreadable} unreadable). Search it for the root cause, function, and invariant "
             "before claiming novelty; treat unreadable sources as unverified."
         )
+    static_analysis = manifest.get("static_analysis") if isinstance(manifest, dict) else None
+    if static_analysis:
+        lines.append(
+            f"Deterministic access index: {static_analysis.get('path')} lists "
+            f"{static_analysis.get('entrypoints')} external/public state-changing functions with their modifiers and "
+            f"caller checks ({static_analysis.get('unguarded')} without a guard). Start from the unguarded surface and "
+            "verify every guard in code; Slither is available for deeper call-graph and data-flow checks."
+        )
     return "\n".join(lines)
 
 
@@ -1431,6 +1442,16 @@ def _attach_known_issues(manifest: dict[str, Any], source_root: Any, target_root
         return
     if entries:
         manifest["known_issues"] = entries
+
+
+def _attach_static_facts(manifest: dict[str, Any], source_root: Any, target_root: Any) -> None:
+    try:
+        facts = static_facts_module.build_static_facts(Path(source_root), Path(target_root))
+    except Exception:
+        LOGGER.warning("could not build static facts for %s", source_root, exc_info=True)
+        return
+    if facts:
+        manifest["static_analysis"] = facts
 
 
 def _write_workspace_files(repo_dir: str, manifest: dict[str, Any], layout: str, manifest_json: str):

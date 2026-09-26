@@ -21,7 +21,9 @@ import { assertModelSelectionAvailable } from '../lib/modelSelection.js';
 import { lockWorkflowForScan } from '../lib/workflowLocks.js';
 import { lockPostScriptForScan } from '../lib/postScriptLocks.js';
 import { lockAgentSkillForScan } from '../lib/agentSkillLocks.js';
-import { resolveV27Pipeline } from '../lib/v27Pipeline.js';
+import { resolveV27Pipeline, v27PostScriptOrder } from '../lib/v27Pipeline.js';
+import { loadPreflightInputs, scanPreflight } from '../lib/scanPreflight.js';
+import { readRuntimeSettings } from '../lib/runtimeSettings.js';
 import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
 import { selectResearchScans } from '../lib/researchScope.js';
@@ -730,6 +732,29 @@ export function researchScanPage(selection, pagination) {
   };
 }
 
+export function scanPreflightHandler({ loadInputs }) {
+  return async (req, res, next) => {
+    try {
+      const payload = req.body || {};
+      if (!/^\d+$/.test(`${payload.workflowId ?? ''}`)) {
+        return res.status(400).json({ error: 'workflowId is required.' });
+      }
+      const inputs = await loadInputs(payload);
+      res.json({ checks: scanPreflight({ ...inputs, payload }) });
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
+// POST /api/scans/preflight: launch checklist for a scan payload, without creating it.
+router.post(
+  '/preflight',
+  scanPreflightHandler({
+    loadInputs: (payload) => loadPreflightInputs(prisma, payload, { readSettings: readRuntimeSettings }),
+  })
+);
+
 router.get('/', async (req, res, next) => {
   try {
     const { status } = req.query;
@@ -1056,13 +1081,15 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    const v27Pipeline = await resolveV27Pipeline(prisma, valid.workflowId);
+    const v27Pipeline = await resolveV27Pipeline(prisma, valid.workflowId, {
+      afterD3: valid.configuration?.v27_after_d3,
+    });
     const investigation = investigationKindForScan(valid.configuration, v27Pipeline);
     if (investigation.errors.length) throw new ValidationError(investigation.errors);
     const configurationObject = investigation.configuration;
     const primaryPostScriptId = v27Pipeline?.d3 ?? `${valid.postScriptId}`;
     const configuredPostScriptIds = v27Pipeline
-      ? [v27Pipeline.d3, v27Pipeline.d4, v27Pipeline.d5]
+      ? v27PostScriptOrder(v27Pipeline)
       : [
           ...new Set(
             [
@@ -1190,7 +1217,16 @@ router.post('/', async (req, res, next) => {
           configuration: {
             ...configurationObject,
             post_script_ids: configuredPostScriptIds,
-            ...(v27Pipeline ? { v27_pipeline: { d3: v27Pipeline.d3, d4: v27Pipeline.d4, d5: v27Pipeline.d5 } } : {}),
+            ...(v27Pipeline
+              ? {
+                  v27_pipeline: {
+                    d3: v27Pipeline.d3,
+                    d4: v27Pipeline.d4,
+                    d5: v27Pipeline.d5,
+                    ...(v27Pipeline.afterD3.length ? { after_d3: v27Pipeline.afterD3 } : {}),
+                  },
+                }
+              : {}),
             agent_skill_ids: configuredAgentSkillIds,
             post_processing_thinking_effort: valid.postProcessingThinkingEffort,
             ...(valid.postProcessingModelOverride

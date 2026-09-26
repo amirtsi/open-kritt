@@ -806,6 +806,42 @@ def test_snapshot_workspace_places_known_issues_corpus_beside_workspace_files(mo
     assert "known-issues/INDEX.md" in prepared.layout
 
 
+def test_prepare_dependency_workspace_adds_the_static_access_index(monkeypatch, tmp_path):
+    def checkout_with_solidity(repo_full, commit_sha, base_dir, github_token=None):
+        path = Path(base_dir) / repo_full.replace("/", "__")
+        (path / ".git").mkdir(parents=True, exist_ok=True)
+        (path / "repo.txt").write_text(repo_full, encoding="utf-8")
+        (path / "src").mkdir(exist_ok=True)
+        (path / "src" / "Vault.sol").write_text(
+            "contract Vault { function deposit() external {} function setFee() external onlyOwner {} }\n",
+            encoding="utf-8",
+        )
+        return str(path), "commit-repo"
+
+    def fake_copy_checkout(src_dir, dest_dir, *, shared=False, hardlink=False):
+        dest = Path(dest_dir)
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src_dir, dest)
+        return str(dest), "commit-repo"
+
+    monkeypatch.setattr(workspace_module, "checkout_repo", checkout_with_solidity)
+    monkeypatch.setattr(workspace_module, "copy_checkout", fake_copy_checkout)
+    monkeypatch.setattr(workspace_module, "_git_head_commit", fake_cache_git_head)
+
+    prepared = prepare_dependency_workspace(
+        data_dir=str(tmp_path / "data"),
+        checkout_cache_dir=str(tmp_path / "cache"),
+        metadata_id=44,
+        scan=scan(),
+    )
+
+    facts = json.loads(prepared.manifest_json)["static_analysis"]
+    assert facts == {"path": ".open-kritt/static-analysis/ACCESS.md", "entrypoints": 2, "unguarded": 1}
+    assert "static-analysis/ACCESS.md" in prepared.layout
+    assert (Path(prepared.repo_dir) / facts["path"]).is_file()
+
+
 def test_prewarm_scan_checkout_cache_only_populates_cache(monkeypatch, tmp_path):
     calls = []
 
