@@ -228,9 +228,12 @@ def build_pending_jobs(
     shuffle_step_ids = configured_step_ids(scan, "shuffle_pending_step_ids")
     return sorted(
         pending,
+        # Deepest work first, then later repeats first: a lineage finishes all of its
+        # repeats before other lineages start theirs, so it reaches the next depth
+        # instead of waiting for every lineage's first pass.
         key=lambda job: (
             -job.depth,
-            job.state.repeat_run,
+            -job.state.repeat_run,
             job.step.order,
             *_pending_order_value(
                 scan,

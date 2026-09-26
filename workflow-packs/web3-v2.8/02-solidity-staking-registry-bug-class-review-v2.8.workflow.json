@@ -1,0 +1,109 @@
+{
+  "kind": "open-kritt-workflow",
+  "version": 2,
+  "workflow": {
+    "name": "Solidity Staking Registry Bug-Class Review v2.8",
+    "description": "D0 maps production entrypoints starting from the deterministic access index. Three D1 lanes each map one staking registry bug class (balance and fee accounting, registry and oracle lifecycle, custody and value movement). Every lane record reaches three D2 investigators, one per bounty impact type (theft, freezing, insolvency), which persist concrete root-cause candidates for gated D3 hostile verification, D4 local PoC and D5 report readiness.",
+    "levels": [
+      {
+        "depth": 0,
+        "multiOutput": true,
+        "consumesAll": false,
+        "bindPrevious": false,
+        "outputFormat": {
+          "entrypoint_kind": "string",
+          "entrypoint_label": "string",
+          "entrypoint_handler": "string",
+          "entrypoint_file_path": "string",
+          "entrypoint_line": "number",
+          "entrypoint_actor": "string",
+          "entrypoint_input": "string",
+          "entrypoint_reachability": "string"
+        },
+        "steps": [
+          {
+            "name": "Map external entrypoints precisely",
+            "content": "You are mapping the complete externally reachable attack surface of {{repo_full}} at commit {{commit_sha}}.\n\nRepository scope: {{repo_scope}}\nDependencies: {{dependencies}}\nRuntime configuration: {{configuration}}\n\nFind each distinct production entrypoint through which an actor outside the deployed process or a less-trusted subsystem can directly or indirectly cause the application to receive, persist, or later process attacker-influenced input. Systematically inspect startup and registration code, interfaces and generated adapters, dispatch tables, public HTTP/GraphQL/gRPC/RPC/WebSocket/webhook routes, peer and validator protocols, transactions and message handlers, block/consensus callbacks, queues and events, parsers and decoders, snapshot/import paths, public contract functions, callbacks, upgrade/governance handlers, and public package or CLI boundaries used in production. Include input written by one operation and consumed later by another component.\n\nFor every entrypoint:\n- Identify the concrete ingress, registration path, and first application handler.\n- State the least-privileged realistic external actor and the exact fields, bytes, messages, ordering, or state they control.\n- Give the exact source path and line for the handler or registration.\n- Prove external reachability with ordered path:line:symbol evidence under the supplied configuration or runtime defaults.\n- Follow workspace dependencies and cross-component wiring; if referenced source is absent, say so in entrypoint_reachability while preserving the proven caller-side entrypoint.\n\nPerform a deliberate second enumeration pass by searching both protocol-facing names and indirect registration patterns. Do not merge distinct handlers, protocol phases, callbacks, or routes merely because they share a dispatcher. Exclude tests, examples, benchmarks, dead code, and interfaces proven limited to the same trusted process. Do not hunt vulnerabilities yet. Return a stub only after both enumeration passes find no production entrypoint.\n\nFan-out limit: emit exactly one record per distinct production handler or registration, not a separate record for each payload, branch, protocol variant, sink, or attack scenario. Keep variants inside entrypoint_input/reachability for the D1 lanes. Missing dependency source is a coverage gap, never evidence that the endpoint is safe.\n\nStart from .open-kritt/static-analysis/ACCESS.md when the workspace provides it: it lists every external or public state-changing function with its modifiers and caller checks. Treat it as an inventory to verify, not as proof; still include callbacks, hooks, and entrypoints it cannot see.\n"
+          }
+        ],
+        "isLastStep": false
+      },
+      {
+        "depth": 1,
+        "multiOutput": false,
+        "consumesAll": false,
+        "bindPrevious": false,
+        "outputFormat": {
+          "lane_focus": "string",
+          "lane_summary": "string",
+          "lane_paths": "array",
+          "lane_sinks": "array",
+          "lane_invariants": "array",
+          "lane_variants": "array",
+          "lane_reachability": "string",
+          "lane_file_path": "string",
+          "lane_line": "number"
+        },
+        "steps": [
+          {
+            "name": "Map balance and fee accounting lane",
+            "content": "Repository {{repo_full}} at {{commit_sha}}; scope {{repo_scope}}; dependencies {{dependencies}}; configuration {{configuration}}.\nProduction entrypoint {{entrypoint_label}} ({{entrypoint_kind}}), handler {{entrypoint_handler}} at {{entrypoint_file_path}}:{{entrypoint_line}}. Least-privileged actor {{entrypoint_actor}}; input {{entrypoint_input}}; reachability {{entrypoint_reachability}}.\n\nMap balance and fee accounting for this entrypoint: per-account and per-group balances and their snapshots, operator and network fee accrual, fee index updates and when they are settled, burn rates and runway, liquidation thresholds and collateral minimums, effective-balance or stake weights used in fee math, rounding and packing precision, and every invariant that ties deposited balances, accrued fees, and withdrawable earnings together. Keep only paths relevant to this bug class.\nRe-read registration, guards, callers and relevant callees. Emit AT MOST ONE output record for this entrypoint and your lane. Put all distinct reachable paths, sinks, invariants and adversarial variants into the arrays of that record; never split a payload, branch, variant or sink into another record. Use path:line:symbol evidence and real configuration. Return a stub ONLY when this entrypoint has no path relevant to this bug class (for example a pure view getter or an unrelated admin setter). Do NOT stub because guards look sufficient, because impact looks low, self-scoped, or recoverable, or because of bounty scope or eligibility: D1 maps, it does not judge safety. When guards look sound, still emit the record and state what each guard actually proves in lane_invariants so D2 can independently try to break it. The configuration's eligible_impacts, out_of_scope, and known-issue sources are context for later stages only; never drop a path because of them, and note any suspected scope concern in lane_reachability. If dependency source is missing, mark it as a coverage gap in lane_reachability instead of claiming safety. Do not claim a vulnerability at D1.\n",
+            "clientId": "d1-accounting"
+          },
+          {
+            "name": "Map registry and oracle lifecycle lane",
+            "content": "Repository {{repo_full}} at {{commit_sha}}; scope {{repo_scope}}; dependencies {{dependencies}}; configuration {{configuration}}.\nProduction entrypoint {{entrypoint_label}} ({{entrypoint_kind}}), handler {{entrypoint_handler}} at {{entrypoint_file_path}}:{{entrypoint_line}}. Least-privileged actor {{entrypoint_actor}}; input {{entrypoint_input}}; reachability {{entrypoint_reachability}}.\n\nMap the registry and oracle lifecycle for this entrypoint: validator and operator registration, removal, exit, liquidation and reactivation; membership sets and the snapshot each transition must match; operator whitelists, limits and fee-change timelocks; oracle-committed roots and reports, quorum and vote counting, epoch or block binding, merkle proof verification and what leaf data it binds (owner, membership, balance, epoch); replay of a proof or report across epochs, groups or owners; and state left behind after removal or reconfiguration. Keep only paths relevant to this bug class.\nRe-read registration, guards, callers and relevant callees. Emit AT MOST ONE output record for this entrypoint and your lane. Put all distinct reachable paths, sinks, invariants and adversarial variants into the arrays of that record; never split a payload, branch, variant or sink into another record. Use path:line:symbol evidence and real configuration. Return a stub ONLY when this entrypoint has no path relevant to this bug class (for example a pure view getter or an unrelated admin setter). Do NOT stub because guards look sufficient, because impact looks low, self-scoped, or recoverable, or because of bounty scope or eligibility: D1 maps, it does not judge safety. When guards look sound, still emit the record and state what each guard actually proves in lane_invariants so D2 can independently try to break it. The configuration's eligible_impacts, out_of_scope, and known-issue sources are context for later stages only; never drop a path because of them, and note any suspected scope concern in lane_reachability. If dependency source is missing, mark it as a coverage gap in lane_reachability instead of claiming safety. Do not claim a vulnerability at D1.\n",
+            "clientId": "d1-lifecycle"
+          },
+          {
+            "name": "Map custody and value movement lane",
+            "content": "Repository {{repo_full}} at {{commit_sha}}; scope {{repo_scope}}; dependencies {{dependencies}}; configuration {{configuration}}.\nProduction entrypoint {{entrypoint_label}} ({{entrypoint_kind}}), handler {{entrypoint_handler}} at {{entrypoint_file_path}}:{{entrypoint_line}}. Least-privileged actor {{entrypoint_actor}}; input {{entrypoint_input}}; reachability {{entrypoint_reachability}}.\n\nMap custody and value movement for this entrypoint: every transfer, approval, native value send, refund and sweep; who funds and who receives; forwarders, wallets and cross-chain or cross-component messages; callbacks and external calls that can re-enter or redirect value; and whether each sender, recipient and amount is bound to the authorized actor. Keep only paths relevant to this bug class.\nRe-read registration, guards, callers and relevant callees. Emit AT MOST ONE output record for this entrypoint and your lane. Put all distinct reachable paths, sinks, invariants and adversarial variants into the arrays of that record; never split a payload, branch, variant or sink into another record. Use path:line:symbol evidence and real configuration. Return a stub ONLY when this entrypoint has no path relevant to this bug class (for example a pure view getter or an unrelated admin setter). Do NOT stub because guards look sufficient, because impact looks low, self-scoped, or recoverable, or because of bounty scope or eligibility: D1 maps, it does not judge safety. When guards look sound, still emit the record and state what each guard actually proves in lane_invariants so D2 can independently try to break it. The configuration's eligible_impacts, out_of_scope, and known-issue sources are context for later stages only; never drop a path because of them, and note any suspected scope concern in lane_reachability. If dependency source is missing, mark it as a coverage gap in lane_reachability instead of claiming safety. Do not claim a vulnerability at D1.\n",
+            "clientId": "d1-custody"
+          }
+        ],
+        "isLastStep": false
+      },
+      {
+        "depth": 2,
+        "multiOutput": true,
+        "consumesAll": false,
+        "bindPrevious": false,
+        "outputFormat": {
+          "explanation": "string",
+          "file_path": "string",
+          "line": "number",
+          "malicious_input_example": "string",
+          "summary": "string",
+          "trigger_flow": "array",
+          "vulnerability_type": "string",
+          "malicious_actor": "string",
+          "exploitable": "boolean",
+          "root_cause_fingerprint": "string",
+          "fix_locus": "string",
+          "broken_invariant": "string",
+          "guard_analysis": "string",
+          "refutation_attempt": "string",
+          "coverage_gap": "string"
+        },
+        "steps": [
+          {
+            "name": "Investigate theft of funds",
+            "content": "Repository {{repo_full}} at {{commit_sha}}; scope {{repo_scope}}; dependencies {{dependencies}}; configuration {{configuration}}.\nEntrypoint {{entrypoint_label}} ({{entrypoint_kind}}), handler {{entrypoint_handler}} at {{entrypoint_file_path}}:{{entrypoint_line}}; actor {{entrypoint_actor}}, controlled input {{entrypoint_input}}, reachability {{entrypoint_reachability}}.\nLane record from D1: focus {{lane_focus}}; summary {{lane_summary}}; paths {{lane_paths}}; sinks {{lane_sinks}}; invariants {{lane_invariants}}; variants {{lane_variants}}; reachability {{lane_reachability}}; focal location {{lane_file_path}}:{{lane_line}}.\n\nHunt only for theft of funds: an unprivileged actor ends with balances, fees, earnings, refunds, or native value that belong to stakers, operators, or the protocol, through this lane's bug class. Follow value to its final holder and quantify what moves.\nIndependently re-read production code and check the full attacker-to-impact sequence. For each distinct root cause, identify the exact faulty operation and path:line, attacker primitive, least-privileged actor, what the existing guard proves, what stronger property the operation needs, broken invariant, shortest trigger, ordered ingress-to-impact trace, potential dominating validation/recovery, missing deployment/dependency facts, and the preliminary root-cause fingerprint. State the fingerprint and fix locus in explanation as well as their fields so semantic deduplication can see them.\n\nEmit ONE record per root cause, not per endpoint, payload, CWE, symptom, or victim. Same fix locus plus same broken invariant is one root cause. Preserve concrete source-grounded candidates with an explicit coverage gap even if exploitable=false; do not invent missing source or deployed configuration. Set exploitable=true when the code shows an unprivileged, actor-controlled path from input through the faulty operation to its effect under a realistic default configuration; record unverified deployment facts (parameters, roles, on-chain state) as assumptions in coverage_gap instead of setting false for them. Set exploitable=false when the path requires a trusted or privileged role, when the only effect is griefing, gas waste, or a recoverable race, or when a link in the trigger chain is missing. Do not fabricate a finding merely to fill the lane. A faulty operation whose demonstrated effect is only griefing, a recoverable race or front-running, gas waste, or harm that depends on an absent off-chain consumer IS a concrete candidate: emit it with exploitable=false and put the impact hypothesis and the missing facts in coverage_gap. The configuration's eligible_impacts, out_of_scope, and known-issue sources are for the post-processing stages only; never drop a candidate because it looks out of scope, already known, or below an eligible impact class — record that suspicion in coverage_gap instead. Return a stub with zero results only when you cannot name a concrete faulty operation at path:line. This is discovery, not PoC or bounty eligibility; the post-processing stages verify canonical root causes later.\n",
+            "clientId": "d2-theft"
+          },
+          {
+            "name": "Investigate freezing of funds",
+            "content": "Repository {{repo_full}} at {{commit_sha}}; scope {{repo_scope}}; dependencies {{dependencies}}; configuration {{configuration}}.\nEntrypoint {{entrypoint_label}} ({{entrypoint_kind}}), handler {{entrypoint_handler}} at {{entrypoint_file_path}}:{{entrypoint_line}}; actor {{entrypoint_actor}}, controlled input {{entrypoint_input}}, reachability {{entrypoint_reachability}}.\nLane record from D1: focus {{lane_focus}}; summary {{lane_summary}}; paths {{lane_paths}}; sinks {{lane_sinks}}; invariants {{lane_invariants}}; variants {{lane_variants}}; reachability {{lane_reachability}}; focal location {{lane_file_path}}:{{lane_line}}.\n\nHunt only for freezing of funds: an unprivileged actor makes balances, earnings, or registrations of stakers or operators unrecoverable, or blocks their withdrawal, removal or reactivation for a period, through this lane's bug class. State whether an admin can recover them and how long the freeze lasts.\nIndependently re-read production code and check the full attacker-to-impact sequence. For each distinct root cause, identify the exact faulty operation and path:line, attacker primitive, least-privileged actor, what the existing guard proves, what stronger property the operation needs, broken invariant, shortest trigger, ordered ingress-to-impact trace, potential dominating validation/recovery, missing deployment/dependency facts, and the preliminary root-cause fingerprint. State the fingerprint and fix locus in explanation as well as their fields so semantic deduplication can see them.\n\nEmit ONE record per root cause, not per endpoint, payload, CWE, symptom, or victim. Same fix locus plus same broken invariant is one root cause. Preserve concrete source-grounded candidates with an explicit coverage gap even if exploitable=false; do not invent missing source or deployed configuration. Set exploitable=true when the code shows an unprivileged, actor-controlled path from input through the faulty operation to its effect under a realistic default configuration; record unverified deployment facts (parameters, roles, on-chain state) as assumptions in coverage_gap instead of setting false for them. Set exploitable=false when the path requires a trusted or privileged role, when the only effect is griefing, gas waste, or a recoverable race, or when a link in the trigger chain is missing. Do not fabricate a finding merely to fill the lane. A faulty operation whose demonstrated effect is only griefing, a recoverable race or front-running, gas waste, or harm that depends on an absent off-chain consumer IS a concrete candidate: emit it with exploitable=false and put the impact hypothesis and the missing facts in coverage_gap. The configuration's eligible_impacts, out_of_scope, and known-issue sources are for the post-processing stages only; never drop a candidate because it looks out of scope, already known, or below an eligible impact class — record that suspicion in coverage_gap instead. Return a stub with zero results only when you cannot name a concrete faulty operation at path:line. This is discovery, not PoC or bounty eligibility; the post-processing stages verify canonical root causes later.\n",
+            "clientId": "d2-freezing"
+          },
+          {
+            "name": "Investigate insolvency and value conservation",
+            "content": "Repository {{repo_full}} at {{commit_sha}}; scope {{repo_scope}}; dependencies {{dependencies}}; configuration {{configuration}}.\nEntrypoint {{entrypoint_label}} ({{entrypoint_kind}}), handler {{entrypoint_handler}} at {{entrypoint_file_path}}:{{entrypoint_line}}; actor {{entrypoint_actor}}, controlled input {{entrypoint_input}}, reachability {{entrypoint_reachability}}.\nLane record from D1: focus {{lane_focus}}; summary {{lane_summary}}; paths {{lane_paths}}; sinks {{lane_sinks}}; invariants {{lane_invariants}}; variants {{lane_variants}}; reachability {{lane_reachability}}; focal location {{lane_file_path}}:{{lane_line}}.\n\nHunt only for protocol insolvency and broken value conservation: an unprivileged sequence leaves liabilities (withdrawable balances, owed operator or network fees) above the tokens the protocol holds, or moves value between stakers or operators without an equivalent exchange, through this lane's bug class. Quantify the deficit.\nIndependently re-read production code and check the full attacker-to-impact sequence. For each distinct root cause, identify the exact faulty operation and path:line, attacker primitive, least-privileged actor, what the existing guard proves, what stronger property the operation needs, broken invariant, shortest trigger, ordered ingress-to-impact trace, potential dominating validation/recovery, missing deployment/dependency facts, and the preliminary root-cause fingerprint. State the fingerprint and fix locus in explanation as well as their fields so semantic deduplication can see them.\n\nEmit ONE record per root cause, not per endpoint, payload, CWE, symptom, or victim. Same fix locus plus same broken invariant is one root cause. Preserve concrete source-grounded candidates with an explicit coverage gap even if exploitable=false; do not invent missing source or deployed configuration. Set exploitable=true when the code shows an unprivileged, actor-controlled path from input through the faulty operation to its effect under a realistic default configuration; record unverified deployment facts (parameters, roles, on-chain state) as assumptions in coverage_gap instead of setting false for them. Set exploitable=false when the path requires a trusted or privileged role, when the only effect is griefing, gas waste, or a recoverable race, or when a link in the trigger chain is missing. Do not fabricate a finding merely to fill the lane. A faulty operation whose demonstrated effect is only griefing, a recoverable race or front-running, gas waste, or harm that depends on an absent off-chain consumer IS a concrete candidate: emit it with exploitable=false and put the impact hypothesis and the missing facts in coverage_gap. The configuration's eligible_impacts, out_of_scope, and known-issue sources are for the post-processing stages only; never drop a candidate because it looks out of scope, already known, or below an eligible impact class — record that suspicion in coverage_gap instead. Return a stub with zero results only when you cannot name a concrete faulty operation at path:line. This is discovery, not PoC or bounty eligibility; the post-processing stages verify canonical root causes later.\n",
+            "clientId": "d2-insolvency"
+          }
+        ],
+        "isLastStep": true
+      }
+    ]
+  }
+}

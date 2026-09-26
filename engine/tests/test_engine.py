@@ -1,8 +1,10 @@
 import errno
 import json
+import os
 import shutil
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -804,6 +806,96 @@ def test_snapshot_workspace_places_known_issues_corpus_beside_workspace_files(mo
     corpus = Path(captured["workspace_files_dir"]) / ".open-kritt" / "known-issues"
     assert (corpus / "INDEX.md").is_file()
     assert "known-issues/INDEX.md" in prepared.layout
+
+
+def test_prepare_dependency_workspace_adds_the_static_access_index(monkeypatch, tmp_path):
+    def checkout_with_solidity(repo_full, commit_sha, base_dir, github_token=None):
+        path = Path(base_dir) / repo_full.replace("/", "__")
+        (path / ".git").mkdir(parents=True, exist_ok=True)
+        (path / "repo.txt").write_text(repo_full, encoding="utf-8")
+        (path / "src").mkdir(exist_ok=True)
+        (path / "src" / "Vault.sol").write_text(
+            "contract Vault { function deposit() external {} function setFee() external onlyOwner {} }\n",
+            encoding="utf-8",
+        )
+        return str(path), "commit-repo"
+
+    def fake_copy_checkout(src_dir, dest_dir, *, shared=False, hardlink=False):
+        dest = Path(dest_dir)
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src_dir, dest)
+        return str(dest), "commit-repo"
+
+    monkeypatch.setattr(workspace_module, "checkout_repo", checkout_with_solidity)
+    monkeypatch.setattr(workspace_module, "copy_checkout", fake_copy_checkout)
+    monkeypatch.setattr(workspace_module, "_git_head_commit", fake_cache_git_head)
+
+    prepared = prepare_dependency_workspace(
+        data_dir=str(tmp_path / "data"),
+        checkout_cache_dir=str(tmp_path / "cache"),
+        metadata_id=44,
+        scan=scan(),
+    )
+
+    facts = json.loads(prepared.manifest_json)["static_analysis"]
+    assert facts == {"path": ".open-kritt/static-analysis/ACCESS.md", "entrypoints": 2, "unguarded": 1}
+    assert "static-analysis/ACCESS.md" in prepared.layout
+    assert (Path(prepared.repo_dir) / facts["path"]).is_file()
+
+
+def test_concurrent_cache_checkouts_do_not_delete_a_snapshot_in_progress(monkeypatch, tmp_path):
+    first_copying = threading.Event()
+    second_started = threading.Event()
+    calls = []
+
+    def slow_snapshot(repo_full, base_dir, local_repos_path=None):
+        calls.append(repo_full)
+        staging = Path(base_dir) / f".{repo_full}.snapshot-{len(calls)}"
+        staging.mkdir(parents=True)
+        (staging / "Contract.sol").write_text("contract C {}\n", encoding="utf-8")
+        if len(calls) == 1:
+            first_copying.set()
+            second_started.wait(timeout=5)
+            time.sleep(0.2)
+        final = Path(base_dir) / repo_full
+        if final.exists():
+            shutil.rmtree(final)
+        os.replace(staging, final)
+        return str(final), "LOCAL_SNAPSHOT_SHA256:abc"
+
+    monkeypatch.setattr(workspace_module, "snapshot_local_repo", slow_snapshot)
+    cache_dir = tmp_path / "cache"
+    results, errors = [], []
+
+    def checkout():
+        try:
+            results.append(
+                workspace_module._checkout_scan_repo_to_cache(
+                    cache_dir=cache_dir,
+                    kind="local",
+                    repo_full="ssv-network",
+                    commit_sha="LOCAL_SNAPSHOT",
+                    github_token=None,
+                    scan_id=21,
+                )
+            )
+        except Exception as exc:  # the race surfaces as FileNotFoundError from the first job
+            errors.append(exc)
+
+    first = threading.Thread(target=checkout)
+    first.start()
+    assert first_copying.wait(timeout=5)
+    second = threading.Thread(target=checkout)
+    second.start()
+    second_started.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert errors == []
+    assert len(results) == 2
+    assert calls == ["ssv-network"]
+    assert all(Path(repo_dir, "Contract.sol").is_file() for repo_dir, _commit in results)
 
 
 def test_prewarm_scan_checkout_cache_only_populates_cache(monkeypatch, tmp_path):
@@ -2511,7 +2603,45 @@ def test_queue_repeats_each_task_before_feeding_accumulated_results_downstream()
 
     completed.add((2, 10, "workflows.step_results", 1))
     pending = build_pending_jobs(scan=sc, workflow=workflow, completed=completed, step_results=results)
-    assert [(j.step.id, j.state.prev_id, j.state.repeat_run) for j in pending] == [(2, 11, 1), (2, 10, 2)]
+    # A lineage finishes its repeats before other lineages start theirs, so it reaches the next depth early.
+    assert [(j.step.id, j.state.prev_id, j.state.repeat_run) for j in pending] == [(2, 10, 2), (2, 11, 1)]
+
+
+def test_queue_sends_a_lineage_with_every_repeat_done_to_the_next_depth_first():
+    workflow = Workflow(
+        id=3,
+        name="wf",
+        steps=(
+            step(1, 0, multi=True),
+            step(2, 1),
+            step(3, 2, is_last=True),
+        ),
+    )
+    sc = scan({"repeat_runs": 2})
+    d0 = (1, 0, None, 1), (1, 0, None, 2)
+    results = {
+        d0[0]: [StepResultRow(id=10, step_id=1, prev_id=0, prev_table=None, repeat_run=1, json_answer={"e": "a"})],
+        d0[1]: [StepResultRow(id=11, step_id=1, prev_id=0, prev_table=None, repeat_run=2, json_answer={"e": "b"})],
+    }
+    completed = set(d0)
+    completed.add((2, 10, "workflows.step_results", 1))
+    results[(2, 10, "workflows.step_results", 1)] = [
+        StepResultRow(
+            id=20, step_id=2, prev_id=10, prev_table="workflows.step_results", repeat_run=1, json_answer={"l": 1}
+        )
+    ]
+
+    pending = build_pending_jobs(scan=sc, workflow=workflow, completed=completed, step_results=results)
+    assert [(j.step.id, j.state.prev_id, j.state.repeat_run) for j in pending][0] == (2, 10, 2)
+
+    completed.add((2, 10, "workflows.step_results", 2))
+    results[(2, 10, "workflows.step_results", 2)] = [
+        StepResultRow(
+            id=21, step_id=2, prev_id=10, prev_table="workflows.step_results", repeat_run=2, json_answer={"l": 2}
+        )
+    ]
+    pending = build_pending_jobs(scan=sc, workflow=workflow, completed=completed, step_results=results)
+    assert pending[0].step.id == 3
 
 
 def test_queue_can_shuffle_one_steps_pending_lineages_without_changing_membership():
