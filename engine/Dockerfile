@@ -10,7 +10,7 @@ WORKDIR /app
 COPY --from=node_runtime /usr/local/ /usr/local/
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl git util-linux \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl git poppler-utils util-linux \
     && npm install --global --no-audit --no-fund npm@12.0.1 \
     && npm install --global --no-audit --no-fund @openai/codex@0.157.1 \
     && codex --version \

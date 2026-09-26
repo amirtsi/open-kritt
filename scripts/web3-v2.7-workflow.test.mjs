@@ -308,3 +308,13 @@ test('v2.7 post-script prompts stay generic and use only reserved finding refere
     assert.ok(!/\{\{\s*extra\./.test(script.content), `${file}: extra references are not allowed`);
   }
 });
+
+test('v2.7 D3 and D5 tie novelty verification to the known-issues corpus', async () => {
+  const scripts = await loadPostScripts();
+  for (const file of ['d3-hostile-verification.post-script.json', 'd5-report-readiness.post-script.json']) {
+    const content = scripts[file].content;
+    assert.match(content, /\.open-kritt\/known-issues\/INDEX\.md/, `${file} must point at the corpus index`);
+    assert.match(content, /novel_verified[^.]*searched[^.]*corpus/i, `${file} must require searched corpus files`);
+    assert.match(content, /unreadable[^.]*unverified/i, `${file} must keep unreadable sources unverified`);
+  }
+});
