@@ -75,6 +75,14 @@ RUN case "${TARGETARCH}" in \
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
+# Slither for agents that want compiler-backed call graphs and data flow on
+# Solidity targets. Isolated so its dependencies never touch the engine's.
+ARG SLITHER_VERSION=0.11.6
+RUN python -m venv /opt/slither \
+    && /opt/slither/bin/pip install --no-cache-dir "slither-analyzer==${SLITHER_VERSION}" \
+    && ln -s /opt/slither/bin/slither /usr/local/bin/slither \
+    && slither --version
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
