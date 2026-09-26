@@ -66,6 +66,10 @@ Desktop normally uses `http://host.docker.internal:11435`), then select **Ollama
 The Ollama harness translates textual JSON/XML tool requests from small local models
 into bounded, read-only repository operations. It can list files, search text, and read
 files only inside the prepared workspace; it does not execute model-supplied commands.
+To keep small models on task, it lists the in-scope source files with per-language
+entrypoint search hints, nudges the model to read files after repeated empty searches,
+lets it save result rows as it goes (`record_results`), and retries a failed prompt at a
+higher temperature.
 This makes it suitable for local discovery workflows, but a workflow step that requires
 running or reproducing a PoC still needs a command-capable verification harness.
 
