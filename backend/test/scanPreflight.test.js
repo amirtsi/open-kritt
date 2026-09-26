@@ -188,3 +188,30 @@ test('the preflight route validates the workflow and returns the checks', async 
   assert.ok(Array.isArray(ok.body.checks));
   assert.ok(ok.body.checks.some((row) => row.id === 'budget'));
 });
+
+test('the job estimate uses the widest earlier entrypoint count, not a weak latest run', async () => {
+  const { loadPreflightInputs } = await import('../src/lib/scanPreflight.js');
+  const scans = [
+    { id: 22n, status: 'completed', workflowId: 28n, repoFull: 'ssv-network', configuration: { program: 'SSV' } },
+    { id: 21n, status: 'completed', workflowId: 28n, repoFull: 'ssv-network', configuration: { program: 'SSV' } },
+    { id: 20n, status: 'failed', workflowId: 28n, repoFull: 'ssv-network', configuration: { program: 'SSV' } },
+  ];
+  const entrypoints = { 22: 19, 21: 174, 20: 0 };
+  const db = {
+    workflow: {
+      findUnique: async () => ({ id: 28n, name: 'Recall-First External Flow Review v2.7', stepIds: [277n] }),
+    },
+    step: { findMany: async () => [{ id: 277n, depth: 0, boundSourceStepId: null }] },
+    scan: { findMany: async () => scans },
+    stepResult: { count: async ({ where }) => entrypoints[`${where.scanId}`] },
+    postScript: { findMany: async () => [] },
+  };
+
+  const inputs = await loadPreflightInputs(
+    db,
+    { workflowId: '28', repo_full: 'ssv-network', configuration: { program: 'SSV' } },
+    { readSettings: async () => ({ settings: { workerCount: { value: 6 } } }) }
+  );
+
+  assert.equal(inputs.estimatedEntrypoints, 174);
+});
