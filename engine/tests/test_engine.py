@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from open_kritt_engine import harnesses
+from open_kritt_engine import known_issues as known_issues_module
 from open_kritt_engine import post_processing as post_processing_module
 from open_kritt_engine import worker as worker_module
 from open_kritt_engine import workspace as workspace_module
@@ -740,6 +741,69 @@ def test_prepare_dependency_workspace_uses_cached_snapshot_image_without_copying
     assert Path(prepared.repo_dir).is_dir()
     assert {path.name for path in Path(prepared.repo_dir).iterdir()} == {"WORKSPACE.json", "WORKSPACE.md"}
     assert json.loads(prepared.manifest_json)["primary"]["path"] == "/workspace"
+
+
+def _checkout_with_audit_pdf(repo_full, commit_sha, base_dir, github_token=None):
+    path = Path(base_dir) / repo_full.replace("/", "__")
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".git").mkdir(exist_ok=True)
+    (path / "repo.txt").write_text(repo_full, encoding="utf-8")
+    (path / "audits").mkdir(exist_ok=True)
+    (path / "audits" / "2026-Quantstamp-audit.pdf").write_bytes(b"%PDF-1.4 audit")
+    return str(path), f"commit-{repo_full.split('/')[-1]}"
+
+
+def test_prepare_dependency_workspace_adds_known_issues_corpus_to_manifest_and_layout(monkeypatch, tmp_path):
+    def fake_copy_checkout(src_dir, dest_dir, *, shared=False, hardlink=False):
+        dest = Path(dest_dir)
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src_dir, dest)
+        return str(dest), "commit-repo"
+
+    monkeypatch.setattr(workspace_module, "checkout_repo", _checkout_with_audit_pdf)
+    monkeypatch.setattr(workspace_module, "copy_checkout", fake_copy_checkout)
+    monkeypatch.setattr(workspace_module, "_git_head_commit", fake_cache_git_head)
+    monkeypatch.setattr(known_issues_module, "pdftotext_converter", lambda _path: "SSV-17 stale balance\f")
+
+    prepared = prepare_dependency_workspace(
+        data_dir=str(tmp_path / "data"),
+        checkout_cache_dir=str(tmp_path / "cache"),
+        metadata_id=43,
+        scan=scan(),
+    )
+
+    entries = json.loads(prepared.manifest_json)["known_issues"]
+    assert [entry["source"] for entry in entries] == ["audits/2026-Quantstamp-audit.pdf"]
+    assert "known-issues/INDEX.md" in prepared.layout
+    text = Path(prepared.repo_dir) / entries[0]["text_path"]
+    assert "SSV-17 stale balance" in text.read_text(encoding="utf-8")
+
+
+def test_snapshot_workspace_places_known_issues_corpus_beside_workspace_files(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_snapshot_image(**kwargs):
+        captured.update(kwargs)
+        return "open-kritt-workspace-snapshot:test"
+
+    monkeypatch.setattr(workspace_module, "checkout_repo", _checkout_with_audit_pdf)
+    monkeypatch.setattr(workspace_module, "_git_head_commit", fake_cache_git_head)
+    monkeypatch.setattr(workspace_module, "ensure_workspace_snapshot_image", fake_snapshot_image)
+    monkeypatch.setattr(known_issues_module, "pdftotext_converter", lambda _path: "audit text\f")
+
+    prepared = prepare_dependency_workspace(
+        data_dir=str(tmp_path / "data"),
+        checkout_cache_dir=str(tmp_path / "cache"),
+        metadata_id=48,
+        scan={**scan(), "commit_sha": "abc123"},
+        use_snapshot_image=True,
+    )
+
+    assert json.loads(captured["manifest_json"])["known_issues"][0]["status"] == "converted"
+    corpus = Path(captured["workspace_files_dir"]) / ".open-kritt" / "known-issues"
+    assert (corpus / "INDEX.md").is_file()
+    assert "known-issues/INDEX.md" in prepared.layout
 
 
 def test_prewarm_scan_checkout_cache_only_populates_cache(monkeypatch, tmp_path):
