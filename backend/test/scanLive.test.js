@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildActivity, buildFunnel } from '../src/lib/scanLive.js';
+import { buildActivity, buildDropouts, buildFunnel, normalizeStubReason } from '../src/lib/scanLive.js';
 
 const PIPELINE = { d3: '15', d4: '13', d5: '16' };
 const scan = (configuration = { v27_pipeline: PIPELINE }) => ({ id: 26n, status: 'post_processing', configuration });
@@ -174,4 +174,71 @@ test('recent errors list the five newest failures and whether they recovered', (
   );
   assert.equal(recentErrors[0].status, 'interrupted');
   assert.equal(recentErrors[0].message, 'boom 6');
+});
+
+test('stub reasons group across file paths, line references and numbers', () => {
+  assert.equal(
+    normalizeStubReason('No  entrypoint in src/ccip/Wallet.sol:12 after 3 checks'),
+    normalizeStubReason('no entrypoint in src/shares/Shares.sol:88 after 7 checks')
+  );
+});
+
+test('dropouts group stubs per step, D3 rejections by verdict, and readiness blockers', () => {
+  const steps = [{ id: 281n, name: 'Investigate authority and value boundaries' }];
+  const stepMetadata = [
+    stepRow(1, 281, 'completed', 1000, { stub: true, stubExplanation: 'No concrete failure in src/A.sol:1.' }),
+    stepRow(2, 281, 'completed', 1000, { stub: true, stubExplanation: 'No concrete failure in src/B.sol:9.' }),
+    stepRow(3, 281, 'completed', 1000, { stub: false, stubExplanation: null }),
+  ];
+  const vulnerabilities = [
+    { id: 1n, dedupeIsCanonical: true, jsonAnswer: { summary: 'Oracle leaf not bound' } },
+    { id: 2n, dedupeIsCanonical: true, jsonAnswer: { summary: 'Fee rounding' } },
+  ];
+  const enrichments = [
+    enrich(1, 15, { verdict: 'confirmed' }),
+    enrich(2, 15, { verdict: 'false_positive', reason: 'x'.repeat(400) }),
+    enrich(1, 16, {
+      _engine_readiness: {
+        ready: false,
+        blocking_reasons: ["Material assumption 'A2' is still open.", "Material assumption 'A3' is still open."],
+      },
+    }),
+  ];
+  const dropouts = buildDropouts({ scan: scan(), steps, stepMetadata, vulnerabilities, enrichments });
+
+  assert.equal(dropouts.stubs.groups.length, 1);
+  assert.equal(dropouts.stubs.groups[0].count, 2);
+  assert.match(dropouts.stubs.groups[0].label, /Investigate authority/);
+  assert.deepEqual(
+    dropouts.d3.groups.map((group) => [group.key, group.count]),
+    [['false_positive', 1]]
+  );
+  assert.equal(dropouts.d3.groups[0].entries[0].detail.length, 300);
+  assert.deepEqual(
+    dropouts.blockers.groups.map((group) => [group.key, group.count]),
+    [["material assumption '…' is still open.", 1]]
+  );
+});
+
+test('dropout sections cap groups at 20 and entries at 50', () => {
+  const steps = Array.from({ length: 25 }, (_, n) => ({ id: BigInt(n + 1), name: `Step ${n + 1}` }));
+  const stepMetadata = [
+    ...steps.map((step, n) =>
+      stepRow(100 + n, Number(step.id), 'completed', 1, {
+        stub: true,
+        stubExplanation: `reason ${String.fromCharCode(97 + n)}`,
+      })
+    ),
+    ...Array.from({ length: 60 }, (_, n) =>
+      stepRow(500 + n, 1, 'completed', 1, { stub: true, stubExplanation: 'same reason' })
+    ),
+  ];
+  const { stubs } = buildDropouts({ scan: scan(), steps, stepMetadata, vulnerabilities: [], enrichments: [] });
+
+  assert.equal(stubs.groups.length, 20);
+  assert.equal(stubs.more, 6);
+  const biggest = stubs.groups[0];
+  assert.equal(biggest.count, 60);
+  assert.equal(biggest.entries.length, 50);
+  assert.equal(biggest.more, 10);
 });

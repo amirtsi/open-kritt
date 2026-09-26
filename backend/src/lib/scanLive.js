@@ -197,3 +197,93 @@ export function buildActivity({ activeJobs, stepMetadata, postMetadata, now }) {
     }));
   return { jobs, recentErrors };
 }
+
+const MAX_GROUPS = 20;
+const MAX_ENTRIES = 50;
+const REASON_CHARS = 300;
+
+export function normalizeStubReason(reason) {
+  return `${reason ?? ''}`
+    .toLowerCase()
+    .replace(/[\w.-]+(\/[\w.-]+)+(:\d+)?/g, '<path>')
+    .replace(/\d+/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function section(groupsByKey) {
+  const groups = [...groupsByKey.values()].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  return {
+    groups: groups.slice(0, MAX_GROUPS).map((group) => ({
+      ...group,
+      entries: group.entries.slice(0, MAX_ENTRIES),
+      more: Math.max(0, group.entries.length - MAX_ENTRIES),
+    })),
+    more: Math.max(0, groups.length - MAX_GROUPS),
+  };
+}
+
+function addEntry(groups, key, label, example, entry) {
+  if (!groups.has(key)) groups.set(key, { key, label, count: 0, example, entries: [] });
+  const group = groups.get(key);
+  group.count += 1;
+  group.entries.push(entry);
+}
+
+export function buildDropouts({ scan, steps, stepMetadata, vulnerabilities, enrichments }) {
+  const stepNames = new Map(steps.map((step) => [text(step.id), step.name]));
+  const stubs = new Map();
+  for (const row of stepMetadata) {
+    if (row.status !== 'completed' || !row.stub) continue;
+    const explanation = `${row.stubExplanation ?? ''}`.trim() || 'No explanation recorded.';
+    const stepName = stepNames.get(text(row.stepId)) || `Step ${text(row.stepId)}`;
+    addEntry(stubs, `${text(row.stepId)}:${normalizeStubReason(explanation)}`, stepName, explanation, {
+      id: text(row.id),
+      summary: stepName,
+      detail: explanation.slice(0, REASON_CHARS),
+    });
+  }
+
+  const d3 = new Map();
+  const blockers = new Map();
+  const ids = pipelineIds(scan);
+  if (ids) {
+    const results = latestStageResults(enrichments);
+    const summaries = new Map(
+      vulnerabilities.map((row) => [
+        text(row.id),
+        `${plainObject(row.jsonAnswer).summary ?? `Finding ${text(row.id)}`}`,
+      ])
+    );
+    const canonical = new Set(
+      vulnerabilities.filter((row) => row.dedupeIsCanonical === true).map((row) => text(row.id))
+    );
+    for (const [findingId, entry] of results.get(ids.d3) || []) {
+      if (!canonical.has(findingId) || entry.stub || KEPT_VERDICTS.has(entry.result.verdict)) continue;
+      const verdict = `${entry.result.verdict ?? 'unknown'}`;
+      const reason = `${entry.result.reason ?? ''}`;
+      addEntry(d3, verdict, verdict, reason.slice(0, REASON_CHARS), {
+        id: findingId,
+        summary: summaries.get(findingId),
+        detail: reason.slice(0, REASON_CHARS),
+      });
+    }
+    for (const [findingId, entry] of results.get(ids.d5) || []) {
+      const readiness = plainObject(entry.result._engine_readiness);
+      if (entry.stub || readiness.ready !== false) continue;
+      const reasons = Array.isArray(readiness.blocking_reasons) ? readiness.blocking_reasons : [];
+      const seen = new Set();
+      for (const reason of reasons.length ? reasons : ['unknown']) {
+        const key = normalizeBlocker(reason);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        addEntry(blockers, key, key, `${reason}`.slice(0, REASON_CHARS), {
+          id: findingId,
+          summary: summaries.get(findingId),
+          detail: `${reason}`.slice(0, REASON_CHARS),
+        });
+      }
+    }
+  }
+  return { stubs: section(stubs), d3: section(d3), blockers: section(blockers) };
+}
