@@ -287,3 +287,58 @@ export function buildDropouts({ scan, steps, stepMetadata, vulnerabilities, enri
   }
   return { stubs: section(stubs), d3: section(d3), blockers: section(blockers) };
 }
+
+export function buildScanLive({
+  scan,
+  steps,
+  stepMetadata,
+  postMetadata,
+  vulnerabilities,
+  enrichments,
+  activeJobs,
+  now,
+}) {
+  return {
+    scanId: text(scan.id),
+    status: scan.status,
+    funnel: buildFunnel({ scan, vulnerabilities, enrichments, postMetadata }),
+    activity: buildActivity({ activeJobs, stepMetadata, postMetadata, now }),
+    dropouts: buildDropouts({ scan, steps, stepMetadata, vulnerabilities, enrichments }),
+  };
+}
+
+const METADATA_SELECT = {
+  id: true,
+  stepId: true,
+  prevId: true,
+  kind: true,
+  status: true,
+  stub: true,
+  stubExplanation: true,
+  runTimeMs: true,
+  runStartedAt: true,
+  insertedAt: true,
+  updatedAt: true,
+  error: true,
+};
+
+export async function loadScanLive(db, scan, { activeJobs = [], now = new Date() } = {}) {
+  const scanId = BigInt(scan.id);
+  const workflow = await db.workflow.findUnique({ where: { id: BigInt(scan.workflowId) }, select: { stepIds: true } });
+  const stepIds = workflow?.stepIds || [];
+  const [steps, stepMetadata, postMetadata, vulnerabilities, enrichments] = await Promise.all([
+    stepIds.length ? db.step.findMany({ where: { id: { in: stepIds } }, select: { id: true, name: true } }) : [],
+    db.stepMetadata.findMany({ where: { scanId, kind: 'step' }, select: METADATA_SELECT }),
+    db.postProcessMetadata.findMany({
+      where: { scanId },
+      select: { id: true, kind: true, postScriptId: true, status: true, runTimeMs: true, updatedAt: true, error: true },
+    }),
+    db.vulnerability.findMany({ where: { scanId }, select: { id: true, dedupeIsCanonical: true, jsonAnswer: true } }),
+    db.vulnerabilityEnrichment.findMany({
+      where: { scanId },
+      select: { vulnerabilityId: true, postScriptId: true, stub: true, supplementalRunId: true, result: true },
+      orderBy: { id: 'asc' },
+    }),
+  ]);
+  return buildScanLive({ scan, steps, stepMetadata, postMetadata, vulnerabilities, enrichments, activeJobs, now });
+}

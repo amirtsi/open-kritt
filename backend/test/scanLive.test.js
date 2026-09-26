@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildActivity, buildDropouts, buildFunnel, normalizeStubReason } from '../src/lib/scanLive.js';
+import { buildActivity, buildDropouts, buildFunnel, loadScanLive, normalizeStubReason } from '../src/lib/scanLive.js';
 
 const PIPELINE = { d3: '15', d4: '13', d5: '16' };
 const scan = (configuration = { v27_pipeline: PIPELINE }) => ({ id: 26n, status: 'post_processing', configuration });
@@ -241,4 +241,37 @@ test('dropout sections cap groups at 20 and entries at 50', () => {
   assert.equal(biggest.count, 60);
   assert.equal(biggest.entries.length, 50);
   assert.equal(biggest.more, 10);
+});
+
+test('loadScanLive reads only the needed columns and assembles every section', async () => {
+  const calls = [];
+  const table = (name, rows) => ({
+    findMany: async (args) => {
+      calls.push([name, args]);
+      return rows;
+    },
+    findUnique: async () => ({ stepIds: [281n] }),
+  });
+  const db = {
+    workflow: table('workflow', []),
+    step: table('step', [{ id: 281n, name: 'Investigate authority' }]),
+    stepMetadata: table('stepMetadata', [stepRow(1, 281, 'completed', 1000)]),
+    postProcessMetadata: table('postProcessMetadata', []),
+    vulnerability: table('vulnerability', [vuln(1, null)]),
+    vulnerabilityEnrichment: table('vulnerabilityEnrichment', []),
+  };
+  const live = await loadScanLive(
+    db,
+    { id: 26n, workflowId: 28n, status: 'running', configuration: { v27_pipeline: PIPELINE } },
+    { activeJobs: [], now: NOW }
+  );
+
+  assert.equal(live.scanId, '26');
+  assert.equal(live.funnel[0].count, 1);
+  assert.deepEqual(Object.keys(live.dropouts), ['stubs', 'd3', 'blockers']);
+  const enrichmentCall = calls.find(([name]) => name === 'vulnerabilityEnrichment')[1];
+  assert.equal(enrichmentCall.select.result, true);
+  const metadataCall = calls.find(([name]) => name === 'stepMetadata')[1];
+  assert.equal(metadataCall.select.promptFilled, undefined);
+  assert.equal(metadataCall.select.stubExplanation, true);
 });

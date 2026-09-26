@@ -113,3 +113,47 @@ test('bounded finding reads cap related post-processing records', async () => {
   );
   assert.equal(enrichmentQuery.take, 3);
 });
+
+import { scanLiveHandler } from '../src/routes/scans.js';
+
+function fakeResponse() {
+  return {
+    statusCode: 200,
+    body: undefined,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    },
+  };
+}
+
+test('scan live route returns 404 for an unknown scan and 400 for a malformed id', async () => {
+  const handler = scanLiveHandler({ findScan: async () => null, load: async () => ({}) });
+  const missing = fakeResponse();
+  await handler({ params: { id: '999' } }, missing, (error) => {
+    throw error;
+  });
+  assert.equal(missing.statusCode, 404);
+
+  const malformed = fakeResponse();
+  await handler({ params: { id: 'abc' } }, malformed, (error) => {
+    throw error;
+  });
+  assert.equal(malformed.statusCode, 400);
+});
+
+test('scan live route returns the loaded live view', async () => {
+  const handler = scanLiveHandler({
+    findScan: async (id) => ({ id }),
+    load: async (scan) => ({ scanId: `${scan.id}`, funnel: [] }),
+  });
+  const res = fakeResponse();
+  await handler({ params: { id: '26' } }, res, (error) => {
+    throw error;
+  });
+  assert.deepEqual(res.body, { scanId: '26', funnel: [] });
+});
