@@ -318,3 +318,16 @@ test('v2.7 D3 and D5 tie novelty verification to the known-issues corpus', async
     assert.match(content, /unreadable[^.]*unverified/i, `${file} must keep unreadable sources unverified`);
   }
 });
+
+test('v2.7 D2 marks exploitable by attacker path, not by unverified deployment facts', async () => {
+  const { workflow } = JSON.parse(await readFile(workflowPath, 'utf8'));
+  const investigators = workflow.levels.find((level) => level.depth === 2).steps;
+  assert.equal(investigators.length, 3);
+  for (const step of investigators) {
+    assert.match(step.content, /exploitable=true when the code shows an unprivileged, actor-controlled path/);
+    assert.match(step.content, /record unverified deployment facts[^.]*as assumptions in coverage_gap/);
+    assert.match(step.content, /exploitable=false when the path requires a trusted or privileged role/);
+    assert.doesNotMatch(step.content, /exploitable=true only for an established actor-controlled end-to-end trigger/);
+    assert.doesNotMatch(step.content, /or unverified deployed state IS a concrete candidate/);
+  }
+});
