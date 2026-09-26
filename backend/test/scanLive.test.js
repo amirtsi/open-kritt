@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildFunnel } from '../src/lib/scanLive.js';
+import { buildActivity, buildFunnel } from '../src/lib/scanLive.js';
 
 const PIPELINE = { d3: '15', d4: '13', d5: '16' };
 const scan = (configuration = { v27_pipeline: PIPELINE }) => ({ id: 26n, status: 'post_processing', configuration });
@@ -101,4 +101,77 @@ test('a scan without a v2.7 pipeline reports raw and canonical only', () => {
     stages.map((stage) => stage.id),
     ['raw', 'canonical']
   );
+});
+
+const NOW = new Date('2026-09-26T12:00:00Z');
+const minutesAgo = (minutes) => new Date(NOW.getTime() - minutes * 60_000);
+const stepRow = (id, stepId, status, runTimeMs, extra = {}) => ({
+  id: BigInt(id),
+  stepId: BigInt(stepId),
+  kind: 'step',
+  status,
+  runTimeMs,
+  runStartedAt: null,
+  insertedAt: minutesAgo(60),
+  updatedAt: minutesAgo(30),
+  error: null,
+  ...extra,
+});
+
+test('a running job slower than twice its step median is flagged', () => {
+  const stepMetadata = [
+    stepRow(1, 281, 'completed', 60_000),
+    stepRow(2, 281, 'completed', 120_000),
+    stepRow(3, 281, 'completed', 180_000),
+    stepRow(4, 281, 'running', null),
+    stepRow(5, 282, 'running', null),
+  ];
+  const activeJobs = [
+    {
+      metadataId: '4',
+      kind: 'step',
+      title: '2 · Investigate authority',
+      phaseLabel: 'Running harness',
+      startedAt: minutesAgo(5),
+      model: 'gpt-6-sol',
+    },
+    {
+      metadataId: '5',
+      kind: 'step',
+      title: '2 · Investigate protocol',
+      phaseLabel: 'Running harness',
+      startedAt: minutesAgo(50),
+      model: 'gpt-6-sol',
+    },
+  ];
+  const { jobs } = buildActivity({ activeJobs, stepMetadata, postMetadata: [], now: NOW });
+
+  assert.deepEqual(
+    jobs.map((job) => [job.metadataId, job.medianMs, job.slow]),
+    [
+      ['4', 120_000, true],
+      ['5', null, false],
+    ]
+  );
+  assert.equal(jobs[0].elapsedMs, 300_000);
+});
+
+test('recent errors list the five newest failures and whether they recovered', () => {
+  const stepMetadata = [
+    ...[1, 2, 3, 4, 5, 6].map((n) =>
+      stepRow(10 + n, 281, n === 6 ? 'interrupted' : 'failed', null, {
+        updatedAt: minutesAgo(10 - n),
+        error: `boom ${n}`,
+      })
+    ),
+    stepRow(30, 281, 'completed', 1000, { prevId: null }),
+  ];
+  const { recentErrors } = buildActivity({ activeJobs: [], stepMetadata, postMetadata: [], now: NOW });
+
+  assert.deepEqual(
+    recentErrors.map((row) => row.metadataId),
+    ['16', '15', '14', '13', '12']
+  );
+  assert.equal(recentErrors[0].status, 'interrupted');
+  assert.equal(recentErrors[0].message, 'boom 6');
 });

@@ -134,3 +134,66 @@ export function buildFunnel({ scan, vulnerabilities, enrichments, postMetadata }
   );
   return stages;
 }
+
+const MIN_SAMPLES = 3;
+const RECENT_ERRORS = 5;
+const ERROR_STATUSES = new Set(['failed', 'interrupted']);
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function stageKey(row, fromPost) {
+  if (fromPost) return `post:${row.kind}:${text(row.postScriptId) ?? ''}`;
+  return `step:${text(row.stepId)}`;
+}
+
+export function buildActivity({ activeJobs, stepMetadata, postMetadata, now }) {
+  const rows = [
+    ...stepMetadata.map((row) => ({ row, key: stageKey(row, false) })),
+    ...postMetadata.map((row) => ({ row, key: stageKey(row, true) })),
+  ];
+  const samples = new Map();
+  const keyById = new Map();
+  for (const { row, key } of rows) {
+    keyById.set(text(row.id), key);
+    if (row.status !== 'completed' || row.runTimeMs === null || row.runTimeMs === undefined) continue;
+    if (!samples.has(key)) samples.set(key, []);
+    samples.get(key).push(Number(row.runTimeMs));
+  }
+  const jobs = activeJobs.map((job) => {
+    const values = samples.get(keyById.get(`${job.metadataId}`)) || [];
+    const medianMs = values.length >= MIN_SAMPLES ? median(values) : null;
+    const elapsedMs = Math.max(0, now.getTime() - new Date(job.startedAt).getTime());
+    return {
+      metadataId: `${job.metadataId}`,
+      title: job.title,
+      phaseLabel: job.phaseLabel,
+      model: job.model || null,
+      elapsedMs,
+      medianMs,
+      slow: medianMs !== null && elapsedMs > 2 * medianMs,
+    };
+  });
+  const recentErrors = rows
+    .filter(({ row }) => ERROR_STATUSES.has(row.status))
+    .sort((a, b) => new Date(b.row.updatedAt) - new Date(a.row.updatedAt))
+    .slice(0, RECENT_ERRORS)
+    .map(({ row, key }) => ({
+      metadataId: text(row.id),
+      stage: key,
+      status: row.status,
+      message: `${row.error ?? ''}`.slice(0, 300),
+      at: row.updatedAt,
+      recovered: rows.some(
+        (other) =>
+          other.key === key &&
+          other.row.status === 'completed' &&
+          new Date(other.row.updatedAt) > new Date(row.updatedAt) &&
+          text(other.row.prevId) === text(row.prevId)
+      ),
+    }));
+  return { jobs, recentErrors };
+}
