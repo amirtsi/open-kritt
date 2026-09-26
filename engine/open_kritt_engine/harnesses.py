@@ -2214,9 +2214,40 @@ class OllamaHarness:
     """
 
     name = "ollama"
-    max_turns = 24
+    max_turns = 48
+    turns_left_warning = 3
+    # Small local models often return an empty stub on the first turn without
+    # reading anything. A "nothing found" answer only counts after this many
+    # repository actions.
+    min_actions_before_stub = 2
     max_tool_output = 20_000
     max_file_bytes = 2 * 1024 * 1024
+    # About 3 characters per token keeps the conversation inside num_ctx=32768.
+    context_char_budget = 90_000
+    max_inventory_files = 300
+    empty_results_before_nudge = 3
+    # Retries of the same prompt get a higher temperature; at temperature 0 a
+    # failed attempt is otherwise replayed byte for byte.
+    _prompt_attempts: dict[str, int] = {}
+    _max_tracked_prompts = 512
+    _inventory_skip_dirs = frozenset(
+        {".git", "lib", "node_modules", "vendor", "out", "cache", "build", "dist", "target", "artifacts"}
+        | {"test", "tests", "mocks", "mock", "typechain-types"}
+    )
+    _language_hints = {
+        ".sol": (
+            "Solidity",
+            "visibility follows the parameter list, so search entrypoints with the regex "
+            r"`function\s+\w+\s*\([^)]*\)[^{;]*\b(external|public)\b`; also check `receive`, `fallback` and modifiers.",
+        ),
+        ".go": ("Go", r"exported handlers match `^func (\(\w+ \*?\w+\) )?[A-Z]\w*\(`."),
+        ".rs": ("Rust", r"public entrypoints match `pub (async )?fn \w+`."),
+        ".move": ("Move", r"entrypoints match `public( entry)? fun \w+`."),
+        ".cairo": ("Cairo", r"entrypoints sit under `#\[abi\(embed_v0\)\]` or `#\[external` and match `fn \w+`."),
+        ".py": ("Python", r"handlers match `^\s*(async )?def \w+` and route decorators such as `@\w+\.(get|post|route)`."),
+        ".ts": ("TypeScript", r"handlers match `export (async )?function \w+` and `\.(get|post|put|delete)\(`."),
+        ".js": ("JavaScript", r"handlers match `export (async )?function \w+` and `\.(get|post|put|delete)\(`."),
+    }
 
     def __init__(self, timeout_seconds: int, model_provider: str | None = None, **_kwargs):
         self.timeout_seconds = timeout_seconds
@@ -2307,6 +2338,85 @@ class OllamaHarness:
         if not isinstance(value, dict):
             raise json.JSONDecodeError("expected object", cleaned, 0)
         return value
+
+    @classmethod
+    def _source_inventory(cls, repo_dir: str) -> list[str]:
+        root = Path(repo_dir).resolve()
+        files: list[str] = []
+        for directory, subdirs, names in os.walk(root):
+            subdirs[:] = sorted(item for item in subdirs if item not in cls._inventory_skip_dirs)
+            for name in sorted(names):
+                if Path(name).suffix in cls._language_hints:
+                    files.append(str((Path(directory) / name).relative_to(root)))
+                    if len(files) >= cls.max_inventory_files:
+                        return files
+        return files
+
+    @classmethod
+    def _repository_guide(cls, inventory: list[str]) -> str:
+        if not inventory:
+            return ""
+        suffixes = {Path(path).suffix for path in inventory}
+        hints = [f"- {language}: {hint}" for suffix, (language, hint) in cls._language_hints.items() if suffix in suffixes]
+        return (
+            "\nRepository source files (vendored, build and test directories omitted):\n"
+            + "\n".join(inventory)
+            + "\nSearch hints by language:\n"
+            + "\n".join(hints)
+            + "\nRead the relevant files with read_file; do not conclude from searches alone."
+        )
+
+    @classmethod
+    def _next_temperature(cls, model: str, prompt: str) -> float:
+        key = hashlib.sha256(f"{model}\0{prompt}".encode()).hexdigest()
+        attempt = cls._prompt_attempts.get(key, 0)
+        if key not in cls._prompt_attempts and len(cls._prompt_attempts) >= cls._max_tracked_prompts:
+            cls._prompt_attempts.pop(next(iter(cls._prompt_attempts)))
+        cls._prompt_attempts[key] = attempt + 1
+        return min(0.7, 0.3 * attempt)
+
+    @staticmethod
+    def _result_item_schema(schema: dict[str, Any]) -> dict[str, Any] | None:
+        results = (schema.get("properties") or {}).get("results")
+        if isinstance(results, dict) and results.get("type") == "array" and isinstance(results.get("items"), dict):
+            return results["items"]
+        return None
+
+    @staticmethod
+    def _merge_rows(recorded: list[Any], payload: dict[str, Any]) -> dict[str, Any]:
+        if not recorded:
+            return payload
+        rows = list(recorded)
+        seen = {json.dumps(row, sort_keys=True) for row in rows}
+        for row in payload.get("results") or []:
+            key = json.dumps(row, sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
+        return {**payload, "stub": False, "stub_explanation": "", "results": rows}
+
+    @staticmethod
+    def _recorded_payload(schema: dict[str, Any], recorded: list[Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if EXTRACTOR_HELPER_FIELD in (schema.get("properties") or {}):
+            payload[EXTRACTOR_HELPER_FIELD] = True
+        payload.update({"stub": False, "stub_explanation": "", "results": list(recorded)})
+        return payload
+
+    def _fit_context(self, messages: list[dict[str, str]], tool_result_indexes: set[int]) -> None:
+        total = sum(len(message["content"]) for message in messages)
+        last = len(messages) - 1
+        for index in sorted(tool_result_indexes):
+            if total <= self.context_char_budget:
+                return
+            if index == last:
+                continue
+            content = messages[index]["content"]
+            first_line = content.splitlines()[0] if content else ""
+            replacement = f"[{first_line} earlier output elided to fit the context window]"
+            total -= len(content) - len(replacement)
+            messages[index]["content"] = replacement
+            tool_result_indexes.discard(index)
 
     def _tool(self, repo_dir: str, name: str, arguments: dict[str, Any]) -> str:
         if name == "read_file":
@@ -2414,24 +2524,46 @@ class OllamaHarness:
         del thinking_effort, runner_image
         actual_env = env if env is not None else os.environ
         base_url = actual_env.get("OLLAMA_BASE_URL") or "http://host.docker.internal:11435"
+        item_schema = self._result_item_schema(schema) if allow_tools else None
         tools = (
             "Use one action at a time as JSON: "
             '{"name":"read_file","arguments":{"path":"relative/file","start_line":1,"line_count":200}}, '
             '{"name":"list_files","arguments":{"path":"relative/dir"}}, or '
             '{"name":"search_text","arguments":{"pattern":"literal or regex","path":"relative/dir"}}. '
             "Never emit shell commands. When finished, return the requested result object directly, with no markdown."
+            + (
+                ' Save result records as soon as you establish them with {"name":"record_results","arguments":'
+                '{"results":[...]}}; each record must match the results item schema. Recorded rows are kept even if '
+                "earlier tool output is elided and are merged into your final object."
+                if item_schema is not None
+                else ""
+            )
             if allow_tools
             else "Return the requested result object directly, with no markdown."
         )
+        inventory = self._source_inventory(repo_dir) if allow_tools else []
         system = (
             "You are a repository security investigator. Work only inside the supplied repository. "
-            f"{tools}\nThe final JSON must satisfy this schema:\n{json.dumps(schema, separators=(',', ':'))}"
+            f"{tools}{self._repository_guide(inventory)}\n"
+            f"The final JSON must satisfy this schema:\n{json.dumps(schema, separators=(',', ':'))}"
         )
         messages: list[dict[str, str]] = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        temperature = self._next_temperature(model, prompt)
         totals = {"prompt_eval_count": 0, "eval_count": 0}
         transcript: list[str] = []
+        tool_actions = 0
+        empty_results = 0
+        seen_actions: set[str] = set()
+        tool_result_indexes: set[int] = set()
+        recorded: list[Any] = []
+        recorded_keys: set[str] = set()
         deadline = time.monotonic() + self.timeout_seconds
-        for _turn in range(self.max_turns):
+        for turn in range(self.max_turns):
+            turns_left = self.max_turns - turn
+            if allow_tools and turn and turns_left <= self.turns_left_warning:
+                messages[-1]["content"] += (
+                    f"\n{turns_left} turns left: record any remaining results and return the final object now."
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise HarnessError(
@@ -2440,13 +2572,14 @@ class OllamaHarness:
                     harness="ollama",
                     output=HarnessOutput(stdout="\n".join(transcript)),
                 )
+            self._fit_context(messages, tool_result_indexes)
             result = self._chat(
                 base_url,
                 {
                     "model": model,
                     "stream": False,
                     "messages": messages,
-                    "options": {"temperature": 0, "num_ctx": 32768},
+                    "options": {"temperature": temperature, "num_ctx": 32768},
                 },
                 remaining,
             )
@@ -2464,11 +2597,72 @@ class OllamaHarness:
             tool_name = candidate.get("name")
             arguments = candidate.get("arguments")
             if allow_tools and isinstance(tool_name, str) and isinstance(arguments, dict):
-                output = self._tool(repo_dir, tool_name, arguments)
                 messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{output}\nContinue with one JSON action or the final object."})
+                action_key = json.dumps([tool_name, arguments], sort_keys=True, default=str)
+                if action_key in seen_actions:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"You already ran this exact {tool_name} action earlier in this conversation. "
+                                "Choose a different action, such as read_file on a source file you have not read, "
+                                "or return the final object."
+                            ),
+                        }
+                    )
+                    continue
+                seen_actions.add(action_key)
+                if tool_name == "record_results" and item_schema is not None:
+                    tool_actions += 1
+                    rows = arguments.get("results")
+                    rows = rows if isinstance(rows, list) else [rows]
+                    accepted, rejected = 0, []
+                    for row in rows:
+                        errors = [error.message for error in Draft202012Validator(item_schema).iter_errors(row)]
+                        if errors:
+                            rejected.append("; ".join(errors[:3]))
+                            continue
+                        key = json.dumps(row, sort_keys=True)
+                        if key not in recorded_keys:
+                            recorded_keys.add(key)
+                            recorded.append(row)
+                        accepted += 1
+                    note = f"Recorded {accepted} row(s); {len(recorded)} recorded in total."
+                    if rejected:
+                        note += " These rows were rejected, fix and record them again: " + " | ".join(rejected[:5])
+                    messages.append({"role": "user", "content": f"{note}\nContinue with one JSON action or the final object."})
+                    continue
+                output = self._tool(repo_dir, tool_name, arguments)
+                tool_actions += 1
+                empty = output.startswith(("no matches", "error:")) or not output.strip()
+                empty_results = empty_results + 1 if empty else 0
+                follow_up = "Continue with one JSON action or the final object."
+                if empty_results >= self.empty_results_before_nudge:
+                    empty_results = 0
+                    suggestions = ", ".join(inventory[:5]) or "the files under the repository root"
+                    follow_up = (
+                        f"Your last {self.empty_results_before_nudge} actions returned no matches. Stop guessing "
+                        "search phrases and read the source directly: use read_file on files such as "
+                        f"{suggestions}. {follow_up}"
+                    )
+                tool_result_indexes.add(len(messages))
+                messages.append({"role": "user", "content": f"Tool result for {tool_name}:\n{output}\n{follow_up}"})
                 continue
             payload = candidate.get("final") if isinstance(candidate.get("final"), dict) else candidate
+            payload = self._merge_rows(recorded, payload)
+            if allow_tools and payload.get("stub") is True and tool_actions < self.min_actions_before_stub:
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You returned a no-finding stub without inspecting the repository. Use list_files, "
+                            "search_text, and read_file to examine the relevant source before concluding. "
+                            "Continue with one JSON action."
+                        ),
+                    }
+                )
+                continue
             validation_errors = sorted(
                 Draft202012Validator(schema).iter_errors(payload),
                 key=lambda error: [str(part) for part in error.absolute_path],
@@ -2495,6 +2689,14 @@ class OllamaHarness:
                 usage={"model_provider": "ollama", "local": True, **totals},
                 output=HarnessOutput(stdout="\n".join(transcript)),
             )
+        if recorded:
+            payload = self._recorded_payload(schema, recorded)
+            if not any(Draft202012Validator(schema).iter_errors(payload)):
+                return HarnessResult(
+                    payload=payload,
+                    usage={"model_provider": "ollama", "local": True, **totals},
+                    output=HarnessOutput(stdout="\n".join(transcript)),
+                )
         raise HarnessError(
             "Ollama exhausted the bounded tool loop without a final structured response.",
             code="invalid_output",
