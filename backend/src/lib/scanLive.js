@@ -145,6 +145,14 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+// The unit a retry would redo: a workflow lineage for steps, a finding for
+// post-scripts, a batch for dedupe and ranker runs.
+function lineageKey(row, fromPost) {
+  if (fromPost)
+    return `${row.kind}:${text(row.postScriptId) ?? ''}:${text(row.vulnerabilityId) ?? ''}:${row.batchIndex ?? ''}`;
+  return `${text(row.stepId)}:${row.prevTable ?? ''}:${text(row.prevId) ?? ''}:${row.repeatRun ?? ''}`;
+}
+
 function stageKey(row, fromPost) {
   if (fromPost) return `post:${row.kind}:${text(row.postScriptId) ?? ''}`;
   return `step:${text(row.stepId)}`;
@@ -152,8 +160,8 @@ function stageKey(row, fromPost) {
 
 export function buildActivity({ activeJobs, stepMetadata, postMetadata, now }) {
   const rows = [
-    ...stepMetadata.map((row) => ({ row, key: stageKey(row, false) })),
-    ...postMetadata.map((row) => ({ row, key: stageKey(row, true) })),
+    ...stepMetadata.map((row) => ({ row, key: stageKey(row, false), lineage: lineageKey(row, false) })),
+    ...postMetadata.map((row) => ({ row, key: stageKey(row, true), lineage: lineageKey(row, true) })),
   ];
   const samples = new Map();
   const keyById = new Map();
@@ -181,7 +189,7 @@ export function buildActivity({ activeJobs, stepMetadata, postMetadata, now }) {
     .filter(({ row }) => ERROR_STATUSES.has(row.status))
     .sort((a, b) => new Date(b.row.updatedAt) - new Date(a.row.updatedAt))
     .slice(0, RECENT_ERRORS)
-    .map(({ row, key }) => ({
+    .map(({ row, key, lineage }) => ({
       metadataId: text(row.id),
       stage: key,
       status: row.status,
@@ -189,10 +197,9 @@ export function buildActivity({ activeJobs, stepMetadata, postMetadata, now }) {
       at: row.updatedAt,
       recovered: rows.some(
         (other) =>
-          other.key === key &&
+          other.lineage === lineage &&
           other.row.status === 'completed' &&
-          new Date(other.row.updatedAt) > new Date(row.updatedAt) &&
-          text(other.row.prevId) === text(row.prevId)
+          new Date(other.row.updatedAt) > new Date(row.updatedAt)
       ),
     }));
   return { jobs, recentErrors };
@@ -293,6 +300,7 @@ export function buildScanLive({
   steps,
   stepMetadata,
   postMetadata,
+  postJobMetadata = [],
   vulnerabilities,
   enrichments,
   activeJobs,
@@ -302,7 +310,9 @@ export function buildScanLive({
     scanId: text(scan.id),
     status: scan.status,
     funnel: buildFunnel({ scan, vulnerabilities, enrichments, postMetadata }),
-    activity: buildActivity({ activeJobs, stepMetadata, postMetadata, now }),
+    // Active jobs carry step_metadata ids, so post-processing samples come from
+    // its post-processing mirror rows rather than post_process_metadata.
+    activity: buildActivity({ activeJobs, stepMetadata, postMetadata: postJobMetadata, now }),
     dropouts: buildDropouts({ scan, steps, stepMetadata, vulnerabilities, enrichments }),
   };
 }
@@ -311,6 +321,8 @@ const METADATA_SELECT = {
   id: true,
   stepId: true,
   prevId: true,
+  prevTable: true,
+  repeatRun: true,
   kind: true,
   status: true,
   stub: true,
@@ -326,9 +338,23 @@ export async function loadScanLive(db, scan, { activeJobs = [], now = new Date()
   const scanId = BigInt(scan.id);
   const workflow = await db.workflow.findUnique({ where: { id: BigInt(scan.workflowId) }, select: { stepIds: true } });
   const stepIds = workflow?.stepIds || [];
-  const [steps, stepMetadata, postMetadata, vulnerabilities, enrichments] = await Promise.all([
+  const [steps, stepMetadata, postJobMetadata, postMetadata, vulnerabilities, enrichments] = await Promise.all([
     stepIds.length ? db.step.findMany({ where: { id: { in: stepIds } }, select: { id: true, name: true } }) : [],
     db.stepMetadata.findMany({ where: { scanId, kind: 'step' }, select: METADATA_SELECT }),
+    db.stepMetadata.findMany({
+      where: { scanId, kind: { not: 'step' } },
+      select: {
+        id: true,
+        kind: true,
+        postScriptId: true,
+        vulnerabilityId: true,
+        batchIndex: true,
+        status: true,
+        runTimeMs: true,
+        updatedAt: true,
+        error: true,
+      },
+    }),
     db.postProcessMetadata.findMany({
       where: { scanId },
       select: { id: true, kind: true, postScriptId: true, status: true, runTimeMs: true, updatedAt: true, error: true },
@@ -340,7 +366,17 @@ export async function loadScanLive(db, scan, { activeJobs = [], now = new Date()
       orderBy: { id: 'asc' },
     }),
   ]);
-  return buildScanLive({ scan, steps, stepMetadata, postMetadata, vulnerabilities, enrichments, activeJobs, now });
+  return buildScanLive({
+    scan,
+    steps,
+    stepMetadata,
+    postMetadata,
+    postJobMetadata,
+    vulnerabilities,
+    enrichments,
+    activeJobs,
+    now,
+  });
 }
 
 export function verifiedCounts({ scan, vulnerabilities, enrichments }) {
@@ -348,4 +384,60 @@ export function verifiedCounts({ scan, vulnerabilities, enrichments }) {
     buildFunnel({ scan, vulnerabilities, enrichments, postMetadata: [] }).map((stage) => [stage.id, stage.count])
   );
   return { kept: stages.d3_kept ?? 0, impactProven: stages.impact_proven ?? 0 };
+}
+
+// Kept and impact-proven counts for many scans with one filtered query: only
+// scans with a v2.7 pipeline, only their D3 and D4 rows, grouped once by scan.
+export async function verifiedCountsByScan(db, scans) {
+  const counts = new Map(scans.map((scan) => [text(scan.id), { kept: 0, impactProven: 0 }]));
+  const gated = scans.map((scan) => ({ scan, ids: pipelineIds(scan) })).filter(({ ids }) => ids);
+  if (!gated.length) return counts;
+  const scanIds = gated.map(({ scan }) => BigInt(scan.id));
+  const [vulnerabilities, enrichments] = await Promise.all([
+    db.vulnerability.findMany({
+      where: { scanId: { in: scanIds } },
+      select: { id: true, scanId: true, dedupeIsCanonical: true },
+    }),
+    db.vulnerabilityEnrichment.findMany({
+      where: {
+        supplementalRunId: null,
+        OR: gated.map(({ scan, ids }) => ({
+          scanId: BigInt(scan.id),
+          postScriptId: { in: [BigInt(ids.d3), BigInt(ids.d4)] },
+        })),
+      },
+      select: {
+        vulnerabilityId: true,
+        scanId: true,
+        postScriptId: true,
+        stub: true,
+        supplementalRunId: true,
+        result: true,
+      },
+      orderBy: { id: 'asc' },
+    }),
+  ]);
+  const group = (rows) => {
+    const byScan = new Map();
+    for (const row of rows) {
+      const key = text(row.scanId);
+      if (!byScan.has(key)) byScan.set(key, []);
+      byScan.get(key).push(row);
+    }
+    return byScan;
+  };
+  const vulnsByScan = group(vulnerabilities);
+  const enrichmentsByScan = group(enrichments);
+  for (const { scan } of gated) {
+    const key = text(scan.id);
+    counts.set(
+      key,
+      verifiedCounts({
+        scan,
+        vulnerabilities: vulnsByScan.get(key) || [],
+        enrichments: enrichmentsByScan.get(key) || [],
+      })
+    );
+  }
+  return counts;
 }

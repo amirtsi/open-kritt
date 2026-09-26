@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { assembleScans } from '../lib/repo.js';
-import { verifiedCounts } from '../lib/scanLive.js';
+import { verifiedCountsByScan } from '../lib/scanLive.js';
 
 const router = Router();
 
@@ -27,16 +27,10 @@ export function scanResearchKey(scan) {
   return `${identity}::${kind}`;
 }
 
-export function summarizeVerifiedFindings(scans, vulnerabilities, enrichments) {
+export function sumVerifiedCounts(countsByScan) {
   let keptCount = 0;
   let impactProvenCount = 0;
-  for (const scan of scans) {
-    const id = `${scan.id}`;
-    const counts = verifiedCounts({
-      scan,
-      vulnerabilities: vulnerabilities.filter((row) => `${row.scanId}` === id),
-      enrichments: enrichments.filter((row) => `${row.scanId}` === id),
-    });
+  for (const counts of countsByScan.values()) {
     keptCount += counts.kept;
     impactProvenCount += counts.impactProven;
   }
@@ -63,25 +57,11 @@ router.get('/', async (req, res, next) => {
     const focusVulns = researchIds.length
       ? await prisma.vulnerability.findMany({
           where: { scanId: { in: researchIds } },
-          select: { id: true, scanId: true, jsonAnswer: true, dedupeIsCanonical: true },
-        })
-      : [];
-    const focusEnrichments = researchIds.length
-      ? await prisma.vulnerabilityEnrichment.findMany({
-          where: { scanId: { in: researchIds } },
-          select: {
-            vulnerabilityId: true,
-            scanId: true,
-            postScriptId: true,
-            stub: true,
-            supplementalRunId: true,
-            result: true,
-          },
-          orderBy: { id: 'asc' },
+          select: { jsonAnswer: true, dedupeIsCanonical: true },
         })
       : [];
     const { findingsCount, exploitableCount } = summarizeCanonicalFindings(focusVulns);
-    const { keptCount, impactProvenCount } = summarizeVerifiedFindings(researchRaw, focusVulns, focusEnrichments);
+    const { keptCount, impactProvenCount } = sumVerifiedCounts(await verifiedCountsByScan(prisma, researchRaw));
     const representatives = [];
     const seenResearch = new Set();
     for (const scan of recentRaw) {

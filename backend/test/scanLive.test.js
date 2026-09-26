@@ -9,6 +9,7 @@ import {
   loadScanLive,
   normalizeStubReason,
   verifiedCounts,
+  verifiedCountsByScan,
 } from '../src/lib/scanLive.js';
 
 const PIPELINE = { d3: '15', d4: '13', d5: '16' };
@@ -296,4 +297,194 @@ test('verified counts sum kept and impact-proven findings per scan', () => {
     ],
   });
   assert.deepEqual(counts, { kept: 2, impactProven: 1 });
+});
+
+test('running post-script jobs are measured against completed runs of the same script', async () => {
+  const mirror = (id, status, runTimeMs) => ({
+    id: BigInt(id),
+    kind: 'post_script',
+    postScriptId: 13n,
+    vulnerabilityId: BigInt(id),
+    batchIndex: null,
+    status,
+    runTimeMs,
+    updatedAt: minutesAgo(40),
+    error: null,
+  });
+  const stepMetadataRows = (args) =>
+    args.where.kind === 'step'
+      ? []
+      : [
+          mirror(901, 'completed', 60_000),
+          mirror(902, 'completed', 60_000),
+          mirror(903, 'completed', 60_000),
+          mirror(900, 'running', null),
+        ];
+  const db = {
+    workflow: { findUnique: async () => ({ stepIds: [] }) },
+    step: { findMany: async () => [] },
+    stepMetadata: { findMany: async (args) => stepMetadataRows(args) },
+    postProcessMetadata: {
+      findMany: async () => [
+        {
+          id: 900n,
+          kind: 'post_script',
+          postScriptId: 15n,
+          status: 'completed',
+          runTimeMs: 1,
+          updatedAt: minutesAgo(50),
+          error: null,
+        },
+      ],
+    },
+    vulnerability: { findMany: async () => [] },
+    vulnerabilityEnrichment: { findMany: async () => [] },
+  };
+  const activeJobs = [
+    {
+      metadataId: '900',
+      kind: 'post_script',
+      title: 'D4 · Local PoC',
+      phaseLabel: 'Running harness',
+      startedAt: minutesAgo(30),
+      model: 'claude-opus-5',
+    },
+  ];
+
+  const live = await loadScanLive(
+    db,
+    { id: 26n, workflowId: 28n, status: 'post_processing', configuration: { v27_pipeline: PIPELINE } },
+    { activeJobs, now: NOW }
+  );
+
+  assert.equal(live.activity.jobs[0].medianMs, 60_000);
+  assert.equal(live.activity.jobs[0].slow, true);
+});
+
+test('an error is recovered only by a later success of the same lineage or finding', () => {
+  const post = (id, vulnerabilityId, status, minutes) => ({
+    id: BigInt(id),
+    kind: 'post_script',
+    postScriptId: 13n,
+    vulnerabilityId: BigInt(vulnerabilityId),
+    batchIndex: null,
+    status,
+    runTimeMs: 1000,
+    updatedAt: minutesAgo(minutes),
+    error: status === 'failed' ? 'poc failed' : null,
+  });
+  const { recentErrors } = buildActivity({
+    activeJobs: [],
+    stepMetadata: [
+      stepRow(1, 281, 'failed', null, {
+        prevTable: 'step_results',
+        prevId: 5n,
+        repeatRun: 0,
+        updatedAt: minutesAgo(20),
+        error: 'x',
+      }),
+      stepRow(2, 281, 'completed', 1000, {
+        prevTable: 'step_results',
+        prevId: 6n,
+        repeatRun: 0,
+        updatedAt: minutesAgo(10),
+      }),
+      stepRow(3, 281, 'failed', null, {
+        prevTable: 'step_results',
+        prevId: 7n,
+        repeatRun: 0,
+        updatedAt: minutesAgo(20),
+        error: 'y',
+      }),
+      stepRow(4, 281, 'completed', 1000, {
+        prevTable: 'step_results',
+        prevId: 7n,
+        repeatRun: 0,
+        updatedAt: minutesAgo(10),
+      }),
+    ],
+    postMetadata: [post(10, 17, 'failed', 20), post(11, 42, 'completed', 10)],
+    now: NOW,
+  });
+  const recovered = Object.fromEntries(recentErrors.map((row) => [row.metadataId, row.recovered]));
+  assert.deepEqual(recovered, { 1: false, 3: true, 10: false });
+});
+
+test('verified counts per scan query only pipeline scans, D3 and D4 rows, and attribute rows to their scan', async () => {
+  const calls = [];
+  const db = {
+    vulnerability: {
+      findMany: async (args) => {
+        calls.push(['vulnerability', args]);
+        return [
+          { id: 1n, scanId: 21n, dedupeIsCanonical: true },
+          { id: 2n, scanId: 26n, dedupeIsCanonical: true },
+        ];
+      },
+    },
+    vulnerabilityEnrichment: {
+      findMany: async (args) => {
+        calls.push(['enrichment', args]);
+        return [
+          {
+            vulnerabilityId: 1n,
+            scanId: 21n,
+            postScriptId: 12n,
+            stub: false,
+            supplementalRunId: null,
+            result: { verdict: 'confirmed' },
+          },
+          {
+            vulnerabilityId: 1n,
+            scanId: 21n,
+            postScriptId: 13n,
+            stub: false,
+            supplementalRunId: null,
+            result: { _engine_evidence: { bug_status: 'reproduced', impact_status: 'proven', capture_complete: true } },
+          },
+          {
+            vulnerabilityId: 2n,
+            scanId: 26n,
+            postScriptId: 15n,
+            stub: false,
+            supplementalRunId: null,
+            result: { verdict: 'false_positive' },
+          },
+        ];
+      },
+    },
+  };
+  const scans = [
+    { id: 21n, configuration: { v27_pipeline: { d3: '12', d4: '13', d5: '14' } } },
+    { id: 26n, configuration: { v27_pipeline: { d3: '15', d4: '13', d5: '16' } } },
+    { id: 5n, configuration: {} },
+  ];
+
+  const counts = await verifiedCountsByScan(db, scans);
+
+  assert.deepEqual(Object.fromEntries(counts), {
+    21: { kept: 1, impactProven: 1 },
+    26: { kept: 0, impactProven: 0 },
+    5: { kept: 0, impactProven: 0 },
+  });
+  const where = calls.find(([name]) => name === 'enrichment')[1].where;
+  assert.equal(where.supplementalRunId, null);
+  assert.deepEqual(
+    where.OR.map((clause) => [clause.scanId, clause.postScriptId.in]),
+    [
+      [21n, [12n, 13n]],
+      [26n, [15n, 13n]],
+    ]
+  );
+  assert.equal(calls.find(([name]) => name === 'vulnerability')[1].select.jsonAnswer, undefined);
+});
+
+test('verified counts per scan skip the database when no scan has a pipeline', async () => {
+  const db = {
+    vulnerability: { findMany: async () => assert.fail('no query expected') },
+    vulnerabilityEnrichment: { findMany: async () => assert.fail('no query expected') },
+  };
+  assert.deepEqual(Object.fromEntries(await verifiedCountsByScan(db, [{ id: 5n, configuration: {} }])), {
+    5: { kept: 0, impactProven: 0 },
+  });
 });

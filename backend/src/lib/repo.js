@@ -5,7 +5,7 @@ import { prisma } from '../db.js';
 import { serializeWorkflow, serializeScan, timeAgo } from './serialize.js';
 import { isDefaultWorkflowName } from './defaultWorkflows.js';
 import { readResourceDiagnostics, resourceFailure, resourceWaitingNotice } from './resourceDiagnostics.js';
-import { verifiedCounts } from './scanLive.js';
+import { verifiedCountsByScan } from './scanLive.js';
 
 const PHASE_LABELS = {
   building_workspace: 'Building workspace',
@@ -105,23 +105,12 @@ export async function findingCountsByScan(scans) {
   });
   const map = new Map(scanIds.map((id) => [id.toString(), empty()]));
   if (ids.length === 0) return map;
-  const [vulns, enrichments] = await Promise.all([
+  const [vulns, verified] = await Promise.all([
     prisma.vulnerability.findMany({
       where: { scanId: { in: ids } },
-      select: { id: true, scanId: true, jsonAnswer: true, dedupeIsCanonical: true },
+      select: { scanId: true, jsonAnswer: true, dedupeIsCanonical: true },
     }),
-    prisma.vulnerabilityEnrichment.findMany({
-      where: { scanId: { in: ids } },
-      select: {
-        vulnerabilityId: true,
-        scanId: true,
-        postScriptId: true,
-        stub: true,
-        supplementalRunId: true,
-        result: true,
-      },
-      orderBy: { id: 'asc' },
-    }),
+    verifiedCountsByScan(prisma, scans),
   ]);
   for (const v of vulns) {
     const entry = map.get(v.scanId.toString());
@@ -137,14 +126,9 @@ export async function findingCountsByScan(scans) {
     const ex = v.jsonAnswer && typeof v.jsonAnswer === 'object' ? v.jsonAnswer.exploitable : null;
     if (ex === true || ex === 'true') entry.exploitable += 1;
   }
-  for (const scan of scans) {
-    const entry = map.get(scan.id.toString());
-    const id = scan.id.toString();
-    entry.keptFindings = verifiedCounts({
-      scan,
-      vulnerabilities: vulns.filter((row) => row.scanId.toString() === id),
-      enrichments: enrichments.filter((row) => row.scanId.toString() === id),
-    }).kept;
+  for (const [scanId, counts] of verified) {
+    const entry = map.get(scanId);
+    if (entry) entry.keptFindings = counts.kept;
   }
   return map;
 }
