@@ -169,6 +169,7 @@ const ACTIVE_STATUSES = new Set([
   'rate_limited',
   'post_processing',
 ]);
+const MAX_ESTIMATE_SCANS = 10;
 const OPTIONAL_AFTER_D3 = ['Patched since', 'Is Malicious Actor in scope'];
 
 // Same grouping rule as the research views: research_id, else program, else repository.
@@ -205,21 +206,22 @@ export async function loadPreflightInputs(db, payload, { readSettings }) {
     (scan) => researchIdentity(scan.configuration, scan.repoFull) === identity
   );
 
+  // The widest earlier entrypoint map in this research: a weak model's run can
+  // find a fraction of the surface, so the latest run alone understates cost.
   let estimatedEntrypoints = null;
-  const previous = scans.find((scan) => !ACTIVE_STATUSES.has(scan.status));
-  if (previous) {
+  const finished = scans.filter((scan) => !ACTIVE_STATUSES.has(scan.status)).slice(0, MAX_ESTIMATE_SCANS);
+  for (const previous of finished) {
     const previousShape = await workflowShape(db, previous.workflowId);
     const entrySteps = (previousShape?.steps || []).filter((step) => step.depth === 0).map((step) => step.id);
-    if (entrySteps.length) {
-      const count = await db.stepResult.count({
-        where: {
-          scanId: previous.id,
-          stepId: { in: entrySteps },
-          OR: [{ repeatRun: null }, { repeatRun: { lte: 1 } }],
-        },
-      });
-      estimatedEntrypoints = count || null;
-    }
+    if (!entrySteps.length) continue;
+    const count = await db.stepResult.count({
+      where: {
+        scanId: previous.id,
+        stepId: { in: entrySteps },
+        OR: [{ repeatRun: null }, { repeatRun: { lte: 1 } }],
+      },
+    });
+    if (count > (estimatedEntrypoints ?? 0)) estimatedEntrypoints = count;
   }
 
   const optional = await db.postScript.findMany({
