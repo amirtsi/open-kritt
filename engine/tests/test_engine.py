@@ -2603,7 +2603,45 @@ def test_queue_repeats_each_task_before_feeding_accumulated_results_downstream()
 
     completed.add((2, 10, "workflows.step_results", 1))
     pending = build_pending_jobs(scan=sc, workflow=workflow, completed=completed, step_results=results)
-    assert [(j.step.id, j.state.prev_id, j.state.repeat_run) for j in pending] == [(2, 11, 1), (2, 10, 2)]
+    # A lineage finishes its repeats before other lineages start theirs, so it reaches the next depth early.
+    assert [(j.step.id, j.state.prev_id, j.state.repeat_run) for j in pending] == [(2, 10, 2), (2, 11, 1)]
+
+
+def test_queue_sends_a_lineage_with_every_repeat_done_to_the_next_depth_first():
+    workflow = Workflow(
+        id=3,
+        name="wf",
+        steps=(
+            step(1, 0, multi=True),
+            step(2, 1),
+            step(3, 2, is_last=True),
+        ),
+    )
+    sc = scan({"repeat_runs": 2})
+    d0 = (1, 0, None, 1), (1, 0, None, 2)
+    results = {
+        d0[0]: [StepResultRow(id=10, step_id=1, prev_id=0, prev_table=None, repeat_run=1, json_answer={"e": "a"})],
+        d0[1]: [StepResultRow(id=11, step_id=1, prev_id=0, prev_table=None, repeat_run=2, json_answer={"e": "b"})],
+    }
+    completed = set(d0)
+    completed.add((2, 10, "workflows.step_results", 1))
+    results[(2, 10, "workflows.step_results", 1)] = [
+        StepResultRow(
+            id=20, step_id=2, prev_id=10, prev_table="workflows.step_results", repeat_run=1, json_answer={"l": 1}
+        )
+    ]
+
+    pending = build_pending_jobs(scan=sc, workflow=workflow, completed=completed, step_results=results)
+    assert [(j.step.id, j.state.prev_id, j.state.repeat_run) for j in pending][0] == (2, 10, 2)
+
+    completed.add((2, 10, "workflows.step_results", 2))
+    results[(2, 10, "workflows.step_results", 2)] = [
+        StepResultRow(
+            id=21, step_id=2, prev_id=10, prev_table="workflows.step_results", repeat_run=2, json_answer={"l": 2}
+        )
+    ]
+    pending = build_pending_jobs(scan=sc, workflow=workflow, completed=completed, step_results=results)
+    assert pending[0].step.id == 3
 
 
 def test_queue_can_shuffle_one_steps_pending_lineages_without_changing_membership():
