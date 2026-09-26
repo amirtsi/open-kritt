@@ -563,7 +563,7 @@ export function ScanCard({ scan, to, onResume, onToggleError, onDelete, busy, er
         >
           <Stat value={scan.rawCandidates ?? scan.findings} label="raw candidates" />
           <Stat value={scan.findings} label="findings listed" color="var(--accent)" />
-          <Stat value={scan.exploitable} label="exploitable" />
+          <Stat value={scan.keptFindings ?? 0} label="D3 kept" />
           <Stat value={scan.age} label="ago" />
         </div>
       )}

@@ -8,6 +8,7 @@ import { CardLinkOverlay, Spinner, ErrorState, StatusBadge, Button } from '../co
 import LinkifiedText from '../components/LinkifiedText.jsx';
 import ResourceNotice from '../components/ResourceNotice.jsx';
 import { ScanGraphPanel } from '../components/ScanGraph.jsx';
+import ScanLivePanel from '../components/ScanLive.jsx';
 import {
   sevColor,
   findingSeverity,
@@ -756,6 +757,8 @@ export default function ScanDetail() {
         />
 
         <ScanStatusPanel scan={scan} />
+
+        <ScanLivePanel scanId={scan.id} active={GRAPH_LIVE_STATUSES.includes(scan.status)} />
 
         <ScanGraphPanel scanId={scan.id} active={GRAPH_LIVE_STATUSES.includes(scan.status)} />
 
