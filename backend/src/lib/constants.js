@@ -73,10 +73,10 @@ export const SCAN_STATUSES = [
 export const THINKING_EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const DEFAULT_THINKING_EFFORT = 'medium';
 
-export const MODEL_PROVIDERS = ['codex', 'claude', 'openrouter', 'omniroute', 'xai', 'deepseek'];
+export const MODEL_PROVIDERS = ['codex', 'claude', 'openrouter', 'omniroute', 'xai', 'deepseek', 'ollama'];
 export const DEFAULT_MODEL_PROVIDER = 'openrouter';
 
-export const HARNESSES = ['codex', 'claude-code', 'cursor', 'grok-build'];
+export const HARNESSES = ['codex', 'claude-code', 'cursor', 'grok-build', 'ollama'];
 export const HARNESS_ALIASES = {
   'codex-cli': 'codex',
   'cursor-agent': 'cursor',
@@ -90,11 +90,13 @@ export const MODEL_PROVIDER_HARNESSES = {
   omniroute: ['codex', 'claude-code'],
   xai: ['grok-build'],
   deepseek: ['codex'],
+  ollama: ['ollama'],
 };
 export const HARNESS_THINKING_EFFORTS = {
   codex: ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'claude-code': ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
   'grok-build': ['low', 'medium', 'high', 'xhigh'],
+  ollama: ['default'],
 };
 
 export const GENERATION_KINDS = ['workflow', 'post_script'];

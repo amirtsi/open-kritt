@@ -34,6 +34,8 @@ from .repository import (
     checkout_repo,
     copy_checkout,
     copy_local_snapshot,
+    is_local_snapshot_revision,
+    local_snapshot_revision,
     normalize_repo_full,
     resolve_remote_head,
     snapshot_local_repo,
@@ -1259,8 +1261,8 @@ def _read_ready_cache_checkout(cache_base: Path) -> tuple[str, str] | None:
             repo_path = Path(repo_dir) if isinstance(repo_dir, str) else None
         if repo_path is not None and isinstance(commit, str) and commit and _path_is_inside(repo_path, cache_base):
             if kind == "local":
-                if commit == LOCAL_SNAPSHOT_REVISION and repo_path.is_dir() and not repo_path.is_symlink():
-                    return str(repo_path), commit
+                if is_local_snapshot_revision(commit) and repo_path.is_dir() and not repo_path.is_symlink():
+                    return str(repo_path), local_snapshot_revision(repo_path)
             elif _git_head_commit(repo_path) == commit:
                 return str(repo_path), commit
         return None

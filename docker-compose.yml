@@ -44,6 +44,8 @@ services:
       BACKEND_HOST: 0.0.0.0
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-}
       DATABASE_URL: ${DATABASE_URL:-postgresql://open_kritt:open_kritt_password@db:5432/open_kritt?schema=public}
+      BACKEND_DB_CONNECTION_LIMIT: ${BACKEND_DB_CONNECTION_LIMIT:-5}
+      BACKEND_DB_POOL_TIMEOUT_SECONDS: ${BACKEND_DB_POOL_TIMEOUT_SECONDS:-10}
       # Raw environment keys stay in the engine. The backend receives non-secret
       # presence flags and manages the shared login/key stores used by Accounts.
       OPEN_KRITT_CODEX_API_KEY_CONFIGURED: '${CODEX_API_KEY:+1}'
@@ -54,6 +56,8 @@ services:
       OPEN_KRITT_OMNIROUTE_API_KEY_CONFIGURED: '${OMNIROUTE_API_KEY:+1}'
       OPEN_KRITT_OMNIROUTE_BASE_URL_CONFIGURED: '${OMNIROUTE_BASE_URL:+1}'
       OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-http://omniroute:20128/v1}
+      OPEN_KRITT_OLLAMA_BASE_URL_CONFIGURED: '${OLLAMA_BASE_URL:+1}'
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
       OPEN_KRITT_XAI_API_KEY_CONFIGURED: '${XAI_API_KEY:+1}'
       OPEN_KRITT_CODEX_LOGIN_CONFIGURED: '${CODEX_LOGIN_CONFIGURED:+1}'
       OPEN_KRITT_PROVIDER_CREDENTIALS_PATH: /credentials/providers.json
@@ -167,6 +171,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY:-}
       OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-http://omniroute:20128/v1}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
       XAI_API_KEY: ${XAI_API_KEY:-}
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       CURSOR_AUTH_TOKEN: ${CURSOR_AUTH_TOKEN:-}

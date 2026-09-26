@@ -588,7 +588,7 @@ export default function ScanDetail() {
               {Object.keys(scan.modelOverrides || {}).length
                 ? ` · ${Object.keys(scan.modelOverrides).length} depth overrides`
                 : ''}{' '}
-              · {scan.repoKind === 'local' ? 'local snapshot' : `@${scan.commitShort}`}
+              · {scan.repoKind === 'local' ? scan.revisionShort || 'local snapshot' : `@${scan.commitShort}`}
             </div>
           </div>
           <div className="scan-detail-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -736,8 +736,10 @@ export default function ScanDetail() {
           <ScanStat label="Post-scripts" value={postScripts.length} />
           <ScanStat label="Agent skills" value={scan.agentSkillCount || 0} />
           <ScanStat
-            label={scan.repoKind === 'local' ? 'Revision' : 'Commit'}
-            value={scan.repoKind === 'local' ? 'local snapshot' : scan.commitShort}
+            label={scan.repoKind === 'local' ? 'Snapshot revision' : 'Commit'}
+            value={scan.repoKind === 'local' ? scan.revisionShort || 'local snapshot' : scan.commitShort}
+            title={scan.repoKind === 'local' ? scan.resolvedRevision || scan.commitSha : scan.commitSha}
+            compact
           />
         </div>
 
@@ -902,7 +904,11 @@ export default function ScanDetail() {
                     {d.display || d.repoFull}
                   </span>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                    {d.kind === 'remote' && d.commitSha ? `@${d.commitSha}` : 'local snapshot'}
+                    {d.commitSha
+                      ? d.kind === 'local' && d.commitSha.startsWith('LOCAL_SNAPSHOT_SHA256:')
+                        ? `sha256:${d.commitSha.slice('LOCAL_SNAPSHOT_SHA256:'.length, 'LOCAL_SNAPSHOT_SHA256:'.length + 12)}`
+                        : `@${d.commitSha}`
+                      : 'local snapshot'}
                   </span>
                 </div>
               ))}
@@ -2932,7 +2938,7 @@ function interestingDot(intr) {
   };
 }
 
-function ScanStat({ label, value, color = 'var(--text)' }) {
+function ScanStat({ label, value, color = 'var(--text)', compact = false, title }) {
   return (
     <div
       style={{
@@ -2940,6 +2946,7 @@ function ScanStat({ label, value, color = 'var(--text)' }) {
         borderRadius: 10,
         padding: '13px 15px',
         background: 'var(--surface)',
+        minWidth: 0,
       }}
     >
       <div
@@ -2953,7 +2960,22 @@ function ScanStat({ label, value, color = 'var(--text)' }) {
       >
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 600, marginTop: 6, color }}>{value}</div>
+      <div
+        className={compact ? 'mono' : undefined}
+        title={title || undefined}
+        style={{
+          fontSize: compact ? 15 : 22,
+          fontWeight: 600,
+          marginTop: 6,
+          color,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }

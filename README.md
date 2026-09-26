@@ -55,7 +55,19 @@ over their prompts, workflows, model providers, and infrastructure.
 - **Prioritize results** — apply custom severity rankers, a consistent finding schema,
   and automatic de-duplication.
 - **Bring your own model access** — use a Codex login or connect through OpenAI,
-  Anthropic, DeepSeek, OpenRouter, OmniRoute, or xAI.
+  Anthropic, DeepSeek, OpenRouter, OmniRoute, xAI, or a local Ollama server.
+
+### Local Ollama models
+
+Set `OLLAMA_BASE_URL` to the Ollama endpoint reachable from the engine container (Docker
+Desktop normally uses `http://host.docker.internal:11435`), then select **Ollama
+(local)** and enter an installed model tag such as `qwen2.5-coder:7b-instruct`.
+
+The Ollama harness translates textual JSON/XML tool requests from small local models
+into bounded, read-only repository operations. It can list files, search text, and read
+files only inside the prepared workspace; it does not execute model-supplied commands.
+This makes it suitable for local discovery workflows, but a workflow step that requires
+running or reproducing a PoC still needs a command-capable verification harness.
 
 ### OmniRoute gateway and model failover
 
