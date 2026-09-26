@@ -1214,20 +1214,27 @@ def _checkout_scan_repo_to_cache(
     allow_fallback: bool = True,
 ) -> tuple[str, str]:
     cache_base = _checkout_cache_base(cache_dir, repo_full, commit_sha, kind=kind, scan_id=scan_id)
+    lock_path = Path(cache_dir) / ".locks" / f"{cache_base.name}.lock"
     try:
-        ready = _read_ready_cache_checkout(cache_base)
-        if ready is not None:
-            return ready
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # Concurrent jobs of one scan share this cache entry. Without the lock a
+        # job that sees no ready marker removes the entry while another job is
+        # still snapshotting into it.
+        with _shared_workspace_thread_lock(lock_path), open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            ready = _read_ready_cache_checkout(cache_base)
+            if ready is not None:
+                return ready
 
-        if cache_base.exists():
-            shutil.rmtree(cache_base)
+            if cache_base.exists():
+                shutil.rmtree(cache_base)
 
-        if kind == "local":
-            repo_dir, checked_out = snapshot_local_repo(repo_full, str(cache_base), os.getenv("LOCAL_REPOS_PATH"))
-        else:
-            repo_dir, checked_out = checkout_repo(repo_full, commit_sha, str(cache_base), github_token)
-        _write_ready_cache_checkout(cache_base, repo_dir, checked_out, kind=kind)
-        return repo_dir, checked_out
+            if kind == "local":
+                repo_dir, checked_out = snapshot_local_repo(repo_full, str(cache_base), os.getenv("LOCAL_REPOS_PATH"))
+            else:
+                repo_dir, checked_out = checkout_repo(repo_full, commit_sha, str(cache_base), github_token)
+            _write_ready_cache_checkout(cache_base, repo_dir, checked_out, kind=kind)
+            return repo_dir, checked_out
     except OSError as exc:
         if not allow_fallback or exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
             raise

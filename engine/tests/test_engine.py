@@ -1,8 +1,10 @@
 import errno
 import json
+import os
 import shutil
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -840,6 +842,60 @@ def test_prepare_dependency_workspace_adds_the_static_access_index(monkeypatch, 
     assert facts == {"path": ".open-kritt/static-analysis/ACCESS.md", "entrypoints": 2, "unguarded": 1}
     assert "static-analysis/ACCESS.md" in prepared.layout
     assert (Path(prepared.repo_dir) / facts["path"]).is_file()
+
+
+def test_concurrent_cache_checkouts_do_not_delete_a_snapshot_in_progress(monkeypatch, tmp_path):
+    first_copying = threading.Event()
+    second_started = threading.Event()
+    calls = []
+
+    def slow_snapshot(repo_full, base_dir, local_repos_path=None):
+        calls.append(repo_full)
+        staging = Path(base_dir) / f".{repo_full}.snapshot-{len(calls)}"
+        staging.mkdir(parents=True)
+        (staging / "Contract.sol").write_text("contract C {}\n", encoding="utf-8")
+        if len(calls) == 1:
+            first_copying.set()
+            second_started.wait(timeout=5)
+            time.sleep(0.2)
+        final = Path(base_dir) / repo_full
+        if final.exists():
+            shutil.rmtree(final)
+        os.replace(staging, final)
+        return str(final), "LOCAL_SNAPSHOT_SHA256:abc"
+
+    monkeypatch.setattr(workspace_module, "snapshot_local_repo", slow_snapshot)
+    cache_dir = tmp_path / "cache"
+    results, errors = [], []
+
+    def checkout():
+        try:
+            results.append(
+                workspace_module._checkout_scan_repo_to_cache(
+                    cache_dir=cache_dir,
+                    kind="local",
+                    repo_full="ssv-network",
+                    commit_sha="LOCAL_SNAPSHOT",
+                    github_token=None,
+                    scan_id=21,
+                )
+            )
+        except Exception as exc:  # the race surfaces as FileNotFoundError from the first job
+            errors.append(exc)
+
+    first = threading.Thread(target=checkout)
+    first.start()
+    assert first_copying.wait(timeout=5)
+    second = threading.Thread(target=checkout)
+    second.start()
+    second_started.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert errors == []
+    assert len(results) == 2
+    assert calls == ["ssv-network"]
+    assert all(Path(repo_dir, "Contract.sol").is_file() for repo_dir, _commit in results)
 
 
 def test_prewarm_scan_checkout_cache_only_populates_cache(monkeypatch, tmp_path):
