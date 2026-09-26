@@ -1,8 +1,17 @@
-# Solidity Vault Bug-Class Review v2.8
+# Solidity Bug-Class Reviews v2.8
 
-v2.8 applies the open·kritt creators' advice for focused workflows to Solidity vault protocols:
+v2.8 applies the open·kritt creators' advice for focused workflows to Solidity protocol families. Two variants share everything except their lanes and impact wording:
 
-- **Narrow bug-class lanes instead of generic ones.** D1 maps each entrypoint through three bug classes: share and fee accounting, request and queue lifecycle, and custody and value movement. A lane stubs only when the entrypoint has nothing to do with its class.
+| Pack | Protocol family | D1 bug-class lanes |
+| ---- | --------------- | ------------------ |
+| `01-solidity-vault-bug-class-review-v2.8` | Vaults with share accounting and request queues | share and fee accounting; request and queue lifecycle; custody and value movement |
+| `02-solidity-staking-registry-bug-class-review-v2.8` | Validator and operator registries with oracle-committed state | balance and fee accounting; registry and oracle lifecycle; custody and value movement |
+
+Pick the variant whose lanes match the target's flows: a lane with no matching flow mostly returns stubs.
+
+Both variants follow the same rules:
+
+- **Narrow bug-class lanes instead of generic ones.** D1 maps each entrypoint through the variant's three bug classes. A lane stubs only when the entrypoint has nothing to do with its class.
 - **One investigator per impact type.** D2 is unbound, so every lane record reaches three fresh-context investigators, each hunting one bounty impact: theft of funds, freezing of funds, and insolvency or broken value conservation.
 - **Deterministic facts first.** D0 starts from `.open-kritt/static-analysis/ACCESS.md`, the engine's compiler-free access index. Slither is available in the runner for deeper checks.
 
@@ -10,7 +19,7 @@ The output formats and D2 root-cause rules are identical to v2.7. The gated D3 h
 
 ## Build
 
-`01-solidity-vault-bug-class-review-v2.8.workflow.json` is generated from the v2.7 pack. Re-run the builder after editing v2.7:
+Both workflow files are generated from the v2.7 pack. Re-run the builder after editing v2.7:
 
 ```bash
 python3 workflow-packs/web3-v2.8/build_from_v27.py
@@ -27,10 +36,11 @@ Import with:
 
 ```bash
 ./kritt-headless import workflow ./workflow-packs/web3-v2.8/01-solidity-vault-bug-class-review-v2.8.workflow.json
+./kritt-headless import workflow ./workflow-packs/web3-v2.8/02-solidity-staking-registry-bug-class-review-v2.8.workflow.json
 ```
 
 Structural checks:
 
 ```bash
-node --test scripts/web3-v2.8-workflow.test.mjs
+node --test scripts/web3-v2.8-workflow.test.mjs scripts/web3-v2.8-staking-workflow.test.mjs
 ```

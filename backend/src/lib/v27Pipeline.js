@@ -2,7 +2,11 @@ import { ValidationError } from './validation.js';
 
 export const V27_WORKFLOW_NAME = 'Recall-First External Flow Review v2.7';
 // Workflows whose scans use the gated D3 -> D4 -> D5 pipeline and readiness policy.
-export const V27_GATED_WORKFLOW_NAMES = Object.freeze([V27_WORKFLOW_NAME, 'Solidity Vault Bug-Class Review v2.8']);
+export const V27_GATED_WORKFLOW_NAMES = Object.freeze([
+  V27_WORKFLOW_NAME,
+  'Solidity Vault Bug-Class Review v2.8',
+  'Solidity Staking Registry Bug-Class Review v2.8',
+]);
 // Identifier of the deterministic readiness policy the engine applies to
 // findings of the v2.7 workflow. Snapshotted into each gated scan's
 // configuration; the engine dispatches on the exact string.

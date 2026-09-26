@@ -1,9 +1,11 @@
-"""Build the v2.8 Solidity vault workflow from the v2.7 pack.
+"""Build the v2.8 Solidity bug-class workflows from the v2.7 pack.
 
 v2.8 keeps v2.7's output formats and D2 root-cause rules (so the gated D3, D4
 and D5 post-scripts apply unchanged) and replaces only the focus sentences:
-D1 lanes become Solidity vault bug classes and D2 becomes one unbound
-investigator per bounty impact type. Re-run after editing the v2.7 pack:
+D1 lanes become bug classes of one protocol family and D2 becomes one unbound
+investigator per bounty impact type. Each variant targets a protocol family:
+vaults, and staking registries (validator and operator registries with
+oracle-committed state). Re-run after editing the v2.7 pack:
 
     python3 workflow-packs/web3-v2.8/build_from_v27.py
 """
@@ -14,7 +16,7 @@ from pathlib import Path
 
 PACKS = Path(__file__).resolve().parent.parent
 SOURCE = PACKS / "web3-v2.7" / "01-recall-first-verified-external-flow-review-v2.7.workflow.json"
-TARGET = PACKS / "web3-v2.8" / "01-solidity-vault-bug-class-review-v2.8.workflow.json"
+OUT = PACKS / "web3-v2.8"
 
 NAME = "Solidity Vault Bug-Class Review v2.8"
 DESCRIPTION = (
@@ -93,14 +95,83 @@ IMPACTS = [
     ),
 ]
 
+STAKING_NAME = "Solidity Staking Registry Bug-Class Review v2.8"
+STAKING_DESCRIPTION = (
+    "D0 maps production entrypoints starting from the deterministic access index. Three D1 lanes each map one "
+    "staking registry bug class (balance and fee accounting, registry and oracle lifecycle, custody and value "
+    "movement). Every lane record reaches three D2 investigators, one per bounty impact type (theft, freezing, "
+    "insolvency), which persist concrete root-cause candidates for gated D3 hostile verification, D4 local PoC and "
+    "D5 report readiness."
+)
+STAKING_LANES = [
+    (
+        "d1-accounting",
+        "Map balance and fee accounting lane",
+        "Map balance and fee accounting for this entrypoint: per-account and per-group balances and their snapshots, "
+        "operator and network fee accrual, fee index updates and when they are settled, burn rates and runway, "
+        "liquidation thresholds and collateral minimums, effective-balance or stake weights used in fee math, "
+        "rounding and packing precision, and every invariant that ties deposited balances, accrued fees, and "
+        "withdrawable earnings together. Keep only paths relevant to this bug class.",
+    ),
+    (
+        "d1-lifecycle",
+        "Map registry and oracle lifecycle lane",
+        "Map the registry and oracle lifecycle for this entrypoint: validator and operator registration, removal, "
+        "exit, liquidation and reactivation; membership sets and the snapshot each transition must match; operator "
+        "whitelists, limits and fee-change timelocks; oracle-committed roots and reports, quorum and vote counting, "
+        "epoch or block binding, merkle proof verification and what leaf data it binds (owner, membership, balance, "
+        "epoch); replay of a proof or report across epochs, groups or owners; and state left behind after removal or "
+        "reconfiguration. Keep only paths relevant to this bug class.",
+    ),
+    (
+        "d1-custody",
+        "Map custody and value movement lane",
+        LANES[2][2],
+    ),
+]
+STAKING_IMPACTS = [
+    (
+        "d2-theft",
+        "Investigate theft of funds",
+        "Hunt only for theft of funds: an unprivileged actor ends with balances, fees, earnings, refunds, or native "
+        "value that belong to stakers, operators, or the protocol, through this lane's bug class. Follow value to its "
+        "final holder and quantify what moves.",
+    ),
+    (
+        "d2-freezing",
+        "Investigate freezing of funds",
+        "Hunt only for freezing of funds: an unprivileged actor makes balances, earnings, or registrations of stakers "
+        "or operators unrecoverable, or blocks their withdrawal, removal or reactivation for a period, through this "
+        "lane's bug class. State whether an admin can recover them and how long the freeze lasts.",
+    ),
+    (
+        "d2-insolvency",
+        "Investigate insolvency and value conservation",
+        "Hunt only for protocol insolvency and broken value conservation: an unprivileged sequence leaves liabilities "
+        "(withdrawable balances, owed operator or network fees) above the tokens the protocol holds, or moves value "
+        "between stakers or operators without an equivalent exchange, through this lane's bug class. Quantify the "
+        "deficit.",
+    ),
+]
+VARIANTS = [
+    ("01-solidity-vault-bug-class-review-v2.8.workflow.json", NAME, DESCRIPTION, LANES, IMPACTS),
+    (
+        "02-solidity-staking-registry-bug-class-review-v2.8.workflow.json",
+        STAKING_NAME,
+        STAKING_DESCRIPTION,
+        STAKING_LANES,
+        STAKING_IMPACTS,
+    ),
+]
 
-def build() -> dict:
+
+def build(name: str, description: str, lanes: list, impacts: list) -> dict:
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     d0, d1, d2 = document["workflow"]["levels"]
     result = copy.deepcopy(document)
     workflow = result["workflow"]
-    workflow["name"] = NAME
-    workflow["description"] = DESCRIPTION
+    workflow["name"] = name
+    workflow["description"] = description
     workflow["levels"][0]["steps"][0]["content"] = d0["steps"][0]["content"].rstrip("\n") + "\n\n" + D0_ADDENDUM + "\n"
 
     lane_lines = d1["steps"][1]["content"].split("\n")
@@ -108,23 +179,31 @@ def build() -> dict:
         raise SystemExit("v2.7 D1 stub rule changed; update build_from_v27.py")
     rules = lane_lines[4].replace(V27_STUB_RULE, V28_STUB_RULE)
     workflow["levels"][1]["steps"] = [
-        {"name": name, "content": "\n".join([lane_lines[0], lane_lines[1], "", focus, rules, ""]), "clientId": client}
-        for client, name, focus in LANES
+        {
+            "name": step_name,
+            "content": "\n".join([lane_lines[0], lane_lines[1], "", focus, rules, ""]),
+            "clientId": client,
+        }
+        for client, step_name, focus in lanes
     ]
 
     investigator = d2["steps"][0]["content"].split("\n")
     workflow["levels"][2]["bindPrevious"] = False
     workflow["levels"][2]["steps"] = [
         {
-            "name": name,
+            "name": step_name,
             "content": "\n".join([investigator[0], investigator[1], LANE_RECORD, "", focus, *investigator[5:]]),
             "clientId": client,
         }
-        for client, name, focus in IMPACTS
+        for client, step_name, focus in impacts
     ]
     return result
 
 
 if __name__ == "__main__":
-    TARGET.write_text(json.dumps(build(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"wrote {TARGET}")
+    for filename, name, description, lanes, impacts in VARIANTS:
+        target = OUT / filename
+        target.write_text(
+            json.dumps(build(name, description, lanes, impacts), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        print(f"wrote {target}")

@@ -83,3 +83,9 @@ test('the Solidity vault bug-class workflow uses the same gated pipeline', async
   const resolved = await resolveV27Pipeline(gatedDb('Solidity Vault Bug-Class Review v2.8'), 30);
   assert.equal(resolved.d3, '11');
 });
+
+test('the Solidity staking registry bug-class workflow uses the same gated pipeline', async () => {
+  assert.ok(V27_GATED_WORKFLOW_NAMES.includes('Solidity Staking Registry Bug-Class Review v2.8'));
+  const resolved = await resolveV27Pipeline(gatedDb('Solidity Staking Registry Bug-Class Review v2.8'), 31);
+  assert.equal(resolved.d3, '11');
+});
