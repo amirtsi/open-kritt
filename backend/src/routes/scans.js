@@ -22,6 +22,8 @@ import { lockWorkflowForScan } from '../lib/workflowLocks.js';
 import { lockPostScriptForScan } from '../lib/postScriptLocks.js';
 import { lockAgentSkillForScan } from '../lib/agentSkillLocks.js';
 import { resolveV27Pipeline, v27PostScriptOrder } from '../lib/v27Pipeline.js';
+import { loadPreflightInputs, scanPreflight } from '../lib/scanPreflight.js';
+import { readRuntimeSettings } from '../lib/runtimeSettings.js';
 import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
 import {
@@ -710,6 +712,29 @@ export async function deleteScanIfSafe(tx, scanId) {
 }
 
 // GET /api/scans?status=running
+export function scanPreflightHandler({ loadInputs }) {
+  return async (req, res, next) => {
+    try {
+      const payload = req.body || {};
+      if (!/^\d+$/.test(`${payload.workflowId ?? ''}`)) {
+        return res.status(400).json({ error: 'workflowId is required.' });
+      }
+      const inputs = await loadInputs(payload);
+      res.json({ checks: scanPreflight({ ...inputs, payload }) });
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
+// POST /api/scans/preflight: launch checklist for a scan payload, without creating it.
+router.post(
+  '/preflight',
+  scanPreflightHandler({
+    loadInputs: (payload) => loadPreflightInputs(prisma, payload, { readSettings: readRuntimeSettings }),
+  })
+);
+
 router.get('/', async (req, res, next) => {
   try {
     const { status } = req.query;
