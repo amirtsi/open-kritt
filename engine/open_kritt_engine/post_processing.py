@@ -562,6 +562,11 @@ class PostProcessor:
         def validator(payload):
             return validate_payload(payload, schema, multi_output=False)
 
+        # A supplemental re-run of the D4 stage captures PoC artifacts like the pipeline D4,
+        # so the regenerated PoC test files persist under the finding's artifact directory.
+        stage = stage_for_script(contextual_scan, _int(run["post_script_id"]))
+        is_d4 = stage == "d4"
+
         started = now_utc()
         try:
             payload, usage, codex_session_id, checked_out_commit = self._run_harness_with_retries(
@@ -574,8 +579,10 @@ class PostProcessor:
                 prompt_template=prompt_template,
                 prompt_context=post_script_context(contextual_scan, vulnerability),
                 multi_output=False,
-                kind="supplemental_post_script",
+                kind="v27_poc" if is_d4 else "supplemental_post_script",
+                poc_finding_id=_int(vulnerability["id"]) if is_d4 else None,
             )
+            self._evidence_captures.pop(metadata_id, None)
             rows = validate_payload(payload, schema, multi_output=False)
             result = rows[0] if rows else {}
             run_time_ms = int((now_utc() - started).total_seconds() * 1000)
