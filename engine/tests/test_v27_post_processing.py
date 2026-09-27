@@ -411,3 +411,42 @@ def test_every_stage_marks_metadata_completed(stage_script_id):
     run_stage(db, payloads[stage_script_id])
     assert db.updates[-1]["status"] == "completed"
     assert db.enrichments[-1]["post_script_id"] == stage_script_id
+
+
+def test_a_blocked_post_script_marks_the_finding_and_lets_the_scan_finish():
+    # A model refusal (or any harness failure that survives retries) on ONE finding
+    # must not discard a completed scan: the finding is recorded blocked and the
+    # pipeline keeps going instead of raising.
+    db = FakePostDb(scan=scan_row(), stage_script_id=D4_ID, prior_rows=d4_rows()[:1])
+    processor = PostProcessor(SimpleNamespace(retry_count=0, data_dir="/tmp", github_token=None), db)
+
+    def refusing_runner(**_kwargs):
+        raise post_processing_module.PostProcessExecutionError(
+            "attempt 1: The model process exited without returning a structured result."
+        )
+
+    processor._run_harness_with_retries = refusing_runner
+
+    assert processor._run_next_post_script_or_complete(db.scan, object()) is True
+    assert db.updates[-1]["status"] == "failed"
+    enrichment = db.enrichments[-1]
+    assert enrichment["post_script_id"] == D4_ID
+    assert enrichment["stub"] is False
+    assert enrichment["result"]["_engine_blocked"]["stage"] == "d4"
+    # The blocked result carries no _engine_evidence, so downstream gates skip it.
+    assert "_engine_evidence" not in enrichment["result"]
+
+
+def test_a_rate_limited_post_script_still_defers_the_scan():
+    db = FakePostDb(scan=scan_row(), stage_script_id=D4_ID, prior_rows=d4_rows()[:1])
+    processor = PostProcessor(SimpleNamespace(retry_count=0, data_dir="/tmp", github_token=None), db)
+
+    def rate_limited_runner(**_kwargs):
+        raise post_processing_module.PostProcessRateLimited("provider rate limited", retry_after_seconds=30.0)
+
+    processor._run_harness_with_retries = rate_limited_runner
+
+    with pytest.raises(post_processing_module.PostProcessRateLimited):
+        processor._run_next_post_script_or_complete(db.scan, object())
+    assert db.updates[-1]["status"] == "interrupted"
+    assert db.enrichments == []
