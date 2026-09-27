@@ -7,6 +7,8 @@ import unicodedata
 from datetime import timedelta
 from typing import Any
 
+import psycopg
+
 from .artifact_cleanup import (
     ArtifactCleanupResult,
     cleanup_checkout_caches,
@@ -90,6 +92,9 @@ LOGGER = logging.getLogger("open_kritt_engine")
 NON_RUNNABLE_SCAN_STATUSES = {"queued", "pending", "rate_limited", "paused", "stopped", "failed", "completed"}
 PREWARMING_SCAN_STATUS = "prewarming_cache"
 ORPHANED_METADATA_ERROR = "interrupted by engine restart"
+DATABASE_OUTAGE_METADATA_ERROR = "interrupted by a database outage"
+DATABASE_RECOVERY_ATTEMPTS = 30
+DATABASE_RECOVERY_DELAY_SECONDS = 2.0
 GENERATION_HEARTBEAT_INTERVAL_SECONDS = 15.0
 GENERATION_STALE_AFTER_SECONDS = 60
 GENERATION_RECOVERY_INTERVAL_SECONDS = 15.0
@@ -108,6 +113,14 @@ MEMORY_PRESSURE_EVICTION_COOLDOWN_SECONDS = 30.0
 
 class StepExecutionError(RuntimeError):
     pass
+
+
+class DatabaseUnavailable(RuntimeError):
+    """The database dropped mid-job; the job's metadata row may still say running."""
+
+    def __init__(self, message: str, *, metadata_id: int | None = None):
+        super().__init__(message)
+        self.metadata_id = metadata_id
 
 
 class RateLimitExhausted(StepExecutionError):
@@ -664,6 +677,28 @@ class Worker:
             LOGGER.info("marked %s orphaned running metadata rows interrupted: %s", repaired, counts)
         return counts
 
+    def _interrupt_after_database_recovers(self, metadata_id: int | None) -> None:
+        """Mark a job cut off by a database outage as interrupted, so the queue runs it again."""
+        if metadata_id is None:
+            return
+        for _attempt in range(DATABASE_RECOVERY_ATTEMPTS):
+            try:
+                with self.db.connect() as conn:
+                    self.db.update_metadata(
+                        conn,
+                        metadata_id,
+                        status="stopped",
+                        error=DATABASE_OUTAGE_METADATA_ERROR,
+                        run_time_ms=0,
+                        raw_token_usage=None,
+                        phase="interrupted",
+                    )
+                    conn.commit()
+                return
+            except psycopg.OperationalError:
+                time.sleep(DATABASE_RECOVERY_DELAY_SECONDS)
+        LOGGER.warning("metadata %s stays running until the next engine restart recovers it", metadata_id)
+
     def cleanup_orphaned_artifacts(
         self,
         *,
@@ -992,6 +1027,12 @@ class Worker:
                         )
                     else:
                         LOGGER.warning("scan %s is rate limited and scheduled for automatic retry", scan["id"])
+                return True
+            except (DatabaseUnavailable, psycopg.OperationalError) as exc:
+                # A database restart is transient: keep the scan and requeue the interrupted job.
+                task_finished = True
+                LOGGER.warning("scan %s lost its database connection; keeping it running: %s", scan["id"], exc)
+                self._interrupt_after_database_recovers(getattr(exc, "metadata_id", None))
                 return True
             except Exception as exc:
                 task_finished = True
@@ -1921,6 +1962,8 @@ class Worker:
                     limit_kind=last_exception.code,
                 )
             raise StepExecutionError(f"step {step.id} {failure_summary}")
+        except psycopg.OperationalError as exc:
+            raise DatabaseUnavailable(str(exc), metadata_id=metadata_id) from exc
         finally:
             if metadata_id is not None:
                 if prepared is not None:
