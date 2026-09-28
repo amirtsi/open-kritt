@@ -5,12 +5,23 @@ import { useFetch } from '../lib/useFetch.js';
 import { usePageChrome } from '../context/ui.jsx';
 import { Spinner, ErrorState, StatusBadge } from '../components/ui.jsx';
 import { isScanDeletable } from '../lib/scanPresentation.js';
+import {
+  clearSelectedResearch,
+  readSelectedResearch,
+  researchOptionLabel,
+  writeSelectedResearch,
+} from '../lib/researchSelection.js';
 
 const todayLabel = () => new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
 export default function Overview() {
   usePageChrome([{ label: 'Overview', active: true }], null, []);
-  const [selectedScanId, setSelectedScanId] = useState('');
+  const [selectedScanId, setSelectedScanId] = useState(() => readSelectedResearch());
+  const selectResearch = (scanId) => {
+    setSelectedScanId(scanId);
+    if (scanId) writeSelectedResearch(scanId);
+    else clearSelectedResearch();
+  };
   const [deleteError, setDeleteError] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const { data, loading, error, reload } = useFetch(() => api.overview(selectedScanId), [selectedScanId], {
@@ -29,7 +40,7 @@ export default function Overview() {
     setDeleteError(null);
     try {
       await api.deleteScan(scan.id);
-      setSelectedScanId('');
+      selectResearch('');
       reload();
     } catch (deleteScanError) {
       setDeleteError(deleteScanError);
@@ -62,7 +73,7 @@ export default function Overview() {
               <select
                 aria-label="Research"
                 value={selectedScanId || data.focusScan?.id || ''}
-                onChange={(event) => setSelectedScanId(event.target.value)}
+                onChange={(event) => selectResearch(event.target.value)}
                 style={{
                   border: '1px solid var(--border)',
                   borderRadius: 8,
@@ -73,7 +84,7 @@ export default function Overview() {
               >
                 {data.availableScans.map((scan) => (
                   <option key={scan.id} value={scan.id}>
-                    #{scan.id} · {scan.repoDisplay || scan.repoFull} · {scan.status}
+                    {researchOptionLabel(scan)}
                   </option>
                 ))}
               </select>

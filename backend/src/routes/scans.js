@@ -24,6 +24,7 @@ import { lockAgentSkillForScan } from '../lib/agentSkillLocks.js';
 import { resolveV27Pipeline } from '../lib/v27Pipeline.js';
 import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
+import { selectResearchScans } from '../lib/researchScope.js';
 import {
   createFindingExport,
   createFindingExportLimiter,
@@ -710,6 +711,24 @@ export async function deleteScanIfSafe(tx, scanId) {
 }
 
 // GET /api/scans?status=running
+export function researchScanPage(selection, pagination) {
+  const pageScans = selection.scans.slice(pagination.skip, pagination.skip + pagination.pageSize);
+  const totalItems = selection.scans.length;
+  return {
+    pageScans,
+    body: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalItems,
+      totalPages: Math.max(1, Math.ceil(totalItems / pagination.pageSize)),
+      startIndex: pagination.skip,
+      endIndex: pagination.skip + pageScans.length,
+      runningCount: selection.runningCount,
+      research: selection.research,
+    },
+  };
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { status } = req.query;
@@ -717,6 +736,20 @@ router.get('/', async (req, res, next) => {
     if (status === 'running') where.status = { in: ACTIVE_SCAN_STATUSES };
     else if (status && status !== 'all') where.status = status;
     const pagination = scanListPagination(req.query);
+    if (req.query.research !== undefined) {
+      // Research grouping is derived from scan configuration, so it is applied in
+      // memory over the (small) scan table rather than in SQL.
+      const selection = selectResearchScans(await prisma.scan.findMany(), {
+        research: `${req.query.research}`,
+        status: status || 'all',
+        activeStatuses: ACTIVE_SCAN_STATUSES,
+      });
+      const { pageScans, body } = researchScanPage(
+        selection,
+        pagination || { page: 1, pageSize: Math.max(1, selection.scans.length), skip: 0 }
+      );
+      return res.json({ items: await assembleScans(pageScans), ...body });
+    }
     if (!pagination) {
       const scans = await prisma.scan.findMany({ where, orderBy: SCAN_LIST_ORDER });
       return res.json(await assembleScans(scans));

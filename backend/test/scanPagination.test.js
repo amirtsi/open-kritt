@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   DEFAULT_SCAN_PAGE_SIZE,
   findingExportSourceProfile,
+  researchScanPage,
   MAX_SCAN_PAGE_SIZE,
   SCAN_LIST_ORDER,
   scanListPagination,
@@ -112,4 +113,29 @@ test('bounded finding reads cap related post-processing records', async () => {
     FindingExportTooManyRelatedRecordsError
   );
   assert.equal(enrichmentQuery.take, 3);
+});
+
+test('research scan pages slice the selection and report research-wide counts', () => {
+  const selection = {
+    research: { anchorScanId: '26', label: 'Immunefi Enzyme Onyx', requestedFound: true, scanCount: 3 },
+    scans: [{ id: 26n }, { id: 24n }, { id: 23n }],
+    runningCount: 1,
+  };
+
+  const { pageScans, body } = researchScanPage(selection, { page: 2, pageSize: 2, skip: 2 });
+
+  assert.deepEqual(
+    pageScans.map((scan) => scan.id),
+    [23n]
+  );
+  assert.deepEqual(body, {
+    page: 2,
+    pageSize: 2,
+    totalItems: 3,
+    totalPages: 2,
+    startIndex: 2,
+    endIndex: 3,
+    runningCount: 1,
+    research: selection.research,
+  });
 });
