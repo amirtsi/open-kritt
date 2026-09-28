@@ -150,6 +150,7 @@ export const api = {
   scan: (id) => request(`/scans/${id}`),
   scanVulnerabilities: (id) => request(`/scans/${id}/vulnerabilities`),
   scanGraph: (id) => request(`/scans/${id}/graph`),
+  scanLive: (id) => request(`/scans/${id}/live`),
   supplementalPostScriptRuns: (id) => request(`/scans/${id}/supplemental-post-script-runs`),
   createSupplementalPostScriptRun: (id, body) =>
     request(`/scans/${id}/supplemental-post-script-runs`, { method: 'POST', body }),
