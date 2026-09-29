@@ -1120,6 +1120,7 @@ class PostProcessor:
                 legacy=False,
                 cheatcode_sites=capture.get("cheatcode_sites") or [],
                 poc_source_paths=capture.get("poc_source_paths") or [],
+                uncaptured_poc_imports=capture.get("uncaptured_poc_imports") or [],
             )
         elif stage == "d5":
             d4 = prior.get("d4") if isinstance(prior.get("d4"), dict) else {}

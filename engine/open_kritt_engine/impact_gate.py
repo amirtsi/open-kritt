@@ -119,7 +119,7 @@ def normalize_evidence_path(raw: Any) -> str | None:
 
 
 def declared_evidence_paths(d4: dict[str, Any]) -> list[str]:
-    """Deduplicated union of PoC paths, impact paths, and every hop's evidence paths (declaration order)."""
+    """Deduplicated union of PoC paths, impact paths, every hop's and every victim loss's evidence paths."""
     ordered: list[str] = []
     seen: set[str] = set()
 
@@ -136,6 +136,9 @@ def declared_evidence_paths(d4: dict[str, Any]) -> list[str]:
     for raw in _strings(d4.get("impact_artifact_paths")):
         add(raw)
     for row in _rows(d4.get("impact_chain")):
+        for raw in _strings(row.get("evidence_paths")):
+            add(raw)
+    for row in _rows(d4.get("victim_loss")):
         for raw in _strings(row.get("evidence_paths")):
             add(raw)
     return ordered
@@ -221,6 +224,7 @@ def evidence_block(
     legacy: bool,
     cheatcode_sites: list | None = None,
     poc_source_paths: list | None = None,
+    uncaptured_poc_imports: list | None = None,
 ) -> dict[str, Any]:
     d4 = _dict(d4)
     bug_status = d4.get("bug_status")
@@ -255,6 +259,7 @@ def evidence_block(
         "legacy": bool(legacy),
         "cheatcode_sites": [dict(row) for row in _rows(cheatcode_sites)],
         "poc_source_paths": [path for path in _strings(poc_source_paths) if path],
+        "uncaptured_poc_imports": [path for path in _strings(uncaptured_poc_imports) if path],
     }
     block["lifecycle_status"] = lifecycle_status(None, block, None)
     return block
@@ -439,7 +444,10 @@ def economic_reasons(*, d3: dict[str, Any], d4: dict[str, Any], evidence: dict[s
 
     # E2
     if not _strings(evidence.get("poc_source_paths")):
-        reasons.append("PoC source was not captured, so its setup mutations cannot be verified.")
+        reasons.append("No Foundry/Hardhat PoC test source was captured, so setup mutations cannot be verified.")
+    uncaptured_imports = [path for path in _strings(evidence.get("uncaptured_poc_imports")) if path]
+    if uncaptured_imports:
+        reasons.append("PoC imports sources that were not captured: " + ", ".join(uncaptured_imports) + ".")
     declared = {normalize_site(row.get("site")) for row in mutations} - {None}
     found = {normalize_site(row.get("site")) for row in _rows(evidence.get("cheatcode_sites"))} - {None}
     undeclared = sorted(found - declared)
@@ -631,6 +639,9 @@ def evaluate_readiness(
         evidence_paths.extend(_strings(row.get("evidence_paths")))
     for row in _rows(d5.get("impact_mapping")):
         evidence_paths.extend(_strings(row.get("evidence_paths")))
+    if version in ECONOMIC_POLICY_VERSIONS:
+        for row in _rows(d4.get("victim_loss")):
+            evidence_paths.extend(_strings(row.get("evidence_paths")))
     checks["provenance"].extend(provenance_reasons(evidence_paths, set(_strings(evidence.get("captured_paths")))))
 
     # rule 7

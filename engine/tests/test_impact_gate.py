@@ -529,6 +529,7 @@ def test_evidence_block_normalizes_paths_and_statuses():
         "legacy": False,
         "cheatcode_sites": [],
         "poc_source_paths": [],
+        "uncaptured_poc_imports": [],
     }
     partial_manifest = make_evidence(manifest={"poc.py"})
     assert partial_manifest["unresolved_paths"] == ["attack.log", "balances.json"]
