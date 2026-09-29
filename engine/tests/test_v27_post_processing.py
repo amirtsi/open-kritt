@@ -219,6 +219,8 @@ def test_d4_result_keeps_model_fields_and_adds_engine_evidence():
         "lifecycle_status": "impact_blocked",
         "policy_version": POLICY_VERSION,
         "legacy": False,
+        "cheatcode_sites": [],
+        "poc_source_paths": [],
     }
     assert "_engine_lifecycle" not in stored
 
