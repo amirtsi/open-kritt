@@ -20,7 +20,7 @@ from open_kritt_engine.impact_gate import (
     provenance_reasons,
     synthesize_legacy_blocks,
 )
-from open_kritt_engine.readiness_policies import LEGACY_POLICY_VERSION, POLICY_VERSION
+from open_kritt_engine.readiness_policies import LEGACY_POLICY_VERSION, POLICY_VERSION, POLICY_VERSION_GATE_1
 
 ARTIFACT_DIR = "poc-artifacts/scan-1/finding-2/metadata-3"
 EVALUATED_AT = "2026-09-24T10:00:00+00:00"
@@ -34,10 +34,12 @@ CHECKS = (
     "dimension_coverage",
     "d5_match",
     "scope_and_novelty",
+    "economic_reality",
+    "reality_context",
 )
 
 
-def make_scan(kind="public_bounty", source="user", version=POLICY_VERSION):
+def make_scan(kind="public_bounty", source="user", version=POLICY_VERSION_GATE_1):
     configuration = {}
     if kind is not None:
         configuration["investigation_kind"] = kind
@@ -204,7 +206,7 @@ def test_investigation_settings_reads_explicit_keys_and_normalizes_legacy_scans(
     assert investigation_settings(make_scan("private_audit")) == {
         "investigation_kind": "private_audit",
         "investigation_kind_source": "user",
-        "readiness_policy_version": POLICY_VERSION,
+        "readiness_policy_version": POLICY_VERSION_GATE_1,
         "legacy": False,
     }
     assert investigation_settings({"configuration": {}}) == {
@@ -243,7 +245,7 @@ def test_terminal_impact_proven_is_ready_and_d5_eligible():
     assert tuple(readiness["checks"]) == CHECKS
     assert set(readiness["checks"].values()) == {"pass"}
     assert readiness["policy"] == "public_bounty"
-    assert readiness["policy_version"] == POLICY_VERSION
+    assert readiness["policy_version"] == POLICY_VERSION_GATE_1
     assert readiness["evaluated_at"] == EVALUATED_AT
     assert readiness["legacy"] is False
 

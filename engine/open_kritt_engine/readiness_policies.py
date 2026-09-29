@@ -6,7 +6,10 @@ latest policy: callers receive :class:`UnsupportedPolicyVersion` and must block.
 
 from dataclasses import dataclass
 
-POLICY_VERSION = "v2.7-impact-gate-1"
+POLICY_VERSION = "v2.7-impact-gate-2"
+POLICY_VERSION_GATE_1 = "v2.7-impact-gate-1"
+ECONOMIC_POLICY_VERSIONS = frozenset({POLICY_VERSION})
+HIGH_VALUE_KINDS = frozenset({"public_bounty", "audit_competition"})
 LEGACY_POLICY_VERSION = "legacy-unverified"
 
 INVESTIGATION_KINDS = (
@@ -59,7 +62,7 @@ def _policy(kind, sources, *, scope, novelty, probabilistic, label) -> Investiga
 
 
 _POLICIES: dict[str, dict[str, InvestigationPolicy]] = {
-    POLICY_VERSION: {
+    POLICY_VERSION_GATE_1: {
         "public_bounty": _policy(
             "public_bounty", ("bounty_rule",), scope=True, novelty=True, probabilistic=False, label="submission_ready"
         ),
@@ -97,9 +100,10 @@ _POLICIES: dict[str, dict[str, InvestigationPolicy]] = {
         ),
     }
 }
+_POLICIES[POLICY_VERSION] = dict(_POLICIES[POLICY_VERSION_GATE_1])
 
 _FAMILY_DIMENSIONS: dict[str, dict[str, tuple[str, ...]]] = {
-    POLICY_VERSION: {
+    POLICY_VERSION_GATE_1: {
         "unauthorized_action": ("initial_actor", "permission_boundary", "protected_operation", "unauthorized_result"),
         "funds_loss": ("balance_before", "balance_after", "asset_ownership", "net_change", "recipient_control"),
         "availability_loss": (
@@ -135,6 +139,7 @@ _FAMILY_DIMENSIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "other": (),
     }
 }
+_FAMILY_DIMENSIONS[POLICY_VERSION] = dict(_FAMILY_DIMENSIONS[POLICY_VERSION_GATE_1])
 
 
 def _table(tables: dict[str, dict], version: str) -> dict:

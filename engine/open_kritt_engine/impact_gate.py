@@ -10,6 +10,8 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from .readiness_policies import (
+    ECONOMIC_POLICY_VERSIONS,
+    HIGH_VALUE_KINDS,
     LEGACY_POLICY_VERSION,
     TERMINAL_OUTCOME_DIMENSION,
     UnsupportedPolicyVersion,
@@ -54,7 +56,14 @@ READINESS_CHECKS = (
     "dimension_coverage",
     "d5_match",
     "scope_and_novelty",
+    "economic_reality",
+    "reality_context",
 )
+FUNDS_FAMILIES = frozenset({"funds_loss"})
+VALUE_FAMILIES = frozenset({"funds_loss", "permanent_freezing", "temporary_freezing"})
+MUTATION_ROLES = ("attacker", "victim_user", "protocol_contract", "privileged_role", "third_party", "time")
+UPSTREAM_OK = "none_found"
+PRECONDITION_OK = "present_now"
 LEGACY_REASON = (
     "Investigation kind and readiness policy were not explicitly selected when this legacy scan was created."
 )
@@ -342,6 +351,87 @@ def _material_open_assumptions(d3: dict[str, Any], d4: dict[str, Any]) -> list[s
     return [key for key, row in merged.items() if row.get("material") is True and row.get("status") == "open"]
 
 
+def economic_reasons(*, d3: dict[str, Any], d4: dict[str, Any], evidence: dict[str, Any], kind: str) -> list[str]:
+    from .poc_cheatcodes import normalize_site
+
+    reasons: list[str] = []
+    mutations = _rows(d4.get("setup_mutations"))
+    pnl = _dict(d4.get("attacker_pnl"))
+    losses = _rows(d4.get("victim_loss"))
+    privileged = _rows(d4.get("privileged_calls"))
+    if (
+        not isinstance(d4.get("setup_mutations"), list)
+        or not pnl
+        or not isinstance(d4.get("victim_loss"), list)
+        or not isinstance(d4.get("privileged_calls"), list)
+    ):
+        reasons.append("D4 did not report setup_mutations, attacker_pnl, victim_loss and privileged_calls.")
+    for row in mutations:
+        if row.get("beneficiary_role") not in MUTATION_ROLES:
+            reasons.append(f"Setup mutation at '{_text(row.get('site'))}' has an unknown beneficiary_role.")
+    # E2
+    if not _strings(evidence.get("poc_source_paths")):
+        reasons.append("PoC source was not captured, so its setup mutations cannot be verified.")
+    declared = {normalize_site(row.get("site")) for row in mutations} - {None}
+    undeclared = sorted({_text(row.get("site")) for row in _rows(evidence.get("cheatcode_sites"))} - declared)
+    if undeclared:
+        reasons.append("PoC cheatcode sites are not declared in setup_mutations: " + ", ".join(undeclared) + ".")
+    # E3
+    injected = [_text(row.get("site")) for row in mutations if row.get("beneficiary_role") == "protocol_contract"]
+    if injected:
+        reasons.append(
+            "The PoC placed funds or state into a protocol_contract ("
+            + ", ".join(injected)
+            + "); the exploited balance must already exist on the fork."
+        )
+    family = _text(d3.get("impact_family"))
+    # E4
+    if family in FUNDS_FAMILIES and pnl.get("net_positive") is not True:
+        reasons.append(
+            "The attacker has no positive net profit (outflows do not exceed inflows, including self-funding)."
+        )
+    # E5
+    if family in VALUE_FAMILIES and not any(row.get("preexisting_on_fork") is True for row in losses):
+        reasons.append("No victim loss is of funds preexisting on the fork; injected funds do not count.")
+    # E6
+    if kind in HIGH_VALUE_KINDS:
+        roles = [row for row in mutations if row.get("beneficiary_role") == "privileged_role"]
+        if privileged or roles:
+            sites = [_text(row.get("site")) for row in [*privileged, *roles]]
+            reasons.append("The attack path needs a privileged actor (" + ", ".join(sites) + ").")
+    return reasons
+
+
+def context_reasons(*, d5: dict[str, Any], kind: str, threshold: Any) -> list[str]:
+    reasons: list[str] = []
+    upstream = _dict(d5.get("upstream_fix"))
+    live = _dict(d5.get("precondition_live"))
+    materiality = _dict(d5.get("materiality"))
+    if not upstream or not live or not materiality:
+        reasons.append("D5 did not report upstream_fix, precondition_live and materiality.")
+    if upstream and upstream.get("status") != UPSTREAM_OK:
+        reasons.append(
+            f"Upstream fix status is '{upstream.get('status')}': the root cause is already fixed or documented."
+        )
+    if live and live.get("status") != PRECONDITION_OK:
+        reasons.append(f"Precondition status is '{live.get('status')}', not present on the live chain now.")
+    if kind in HIGH_VALUE_KINDS:
+        try:
+            minimum = float(threshold)
+        except (TypeError, ValueError):
+            minimum = 0.0
+        if minimum <= 0:
+            reasons.append("Scan configuration has no materiality_min_usd, so materiality cannot be verified.")
+        else:
+            try:
+                affected = float(materiality.get("usd_affected"))
+            except (TypeError, ValueError):
+                affected = -1.0
+            if affected < minimum:
+                reasons.append(f"Materiality ${affected:,.2f} is below the scan threshold ${minimum:,.2f}.")
+    return reasons
+
+
 def evaluate_readiness(
     *,
     scan: dict[str, Any],
@@ -480,6 +570,12 @@ def evaluate_readiness(
             d5.get("novelty_status") != "novel_verified" or not _text(d5.get("novelty_evidence"))
         ):
             checks["scope_and_novelty"].append("Novelty is not verified with evidence for this investigation kind.")
+
+    # rules 10-11 (economic reality gate)
+    if version in ECONOMIC_POLICY_VERSIONS:
+        checks["economic_reality"].extend(economic_reasons(d3=d3, d4=d4, evidence=evidence, kind=kind))
+        threshold = _dict(_dict(scan).get("configuration")).get("materiality_min_usd")
+        checks["reality_context"].extend(context_reasons(d5=d5, kind=kind, threshold=threshold))
 
     ready = all(not reasons for reasons in checks.values())
     blocking_reasons: list[str] = []
