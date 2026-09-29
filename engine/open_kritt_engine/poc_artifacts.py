@@ -69,25 +69,39 @@ def _resolve_source(source_root: Path, normalized: str) -> Path:
     return resolved
 
 
-def _workspace_file(source_root: Path, normalized: str) -> bool:
+_PATH_ERRORS = (OSError, RuntimeError, ValueError)  # I/O, symlink loops (RuntimeError), NUL bytes (ValueError)
+_OUTSIDE = "<outside workspace>: "
+
+
+def _workspace_file(source_root: Path, normalized: str) -> str:
+    """'file' for a regular file inside the workspace, 'outside' when it resolves outside, '' otherwise."""
     try:
         resolved = (source_root / normalized).resolve(strict=True)
-    except OSError:
-        return False
-    return resolved.is_file() and resolved.is_relative_to(source_root)
+        if not resolved.is_relative_to(source_root):
+            return "outside"
+        return "file" if resolved.is_file() else ""
+    except _PATH_ERRORS:
+        return ""
 
 
-def _resolve_import(source_root: Path, importer: str, specifier: str) -> str | None:
-    """Workspace-relative path of a relative import, or None when it escapes the workspace or is absent."""
+def _resolve_import(source_root: Path, importer: str, specifier: str) -> tuple[str | None, bool]:
+    """(workspace-relative path, escapes) for a relative import; (None, False) when it does not exist."""
     joined = posixpath.normpath(posixpath.join(posixpath.dirname(importer), specifier))
-    if joined.startswith("../") or joined in ("..", ".") or posixpath.isabs(joined):
-        return None
+    if joined.startswith("../") or joined == ".." or posixpath.isabs(joined):
+        return None, True
+    if joined == ".":
+        return None, False
     suffixes = ("",) if importer.lower().endswith(".sol") else _JS_RESOLVE_SUFFIXES
     for suffix in suffixes:
         candidate = normalize_evidence_path(joined + suffix)
-        if candidate and _workspace_file(source_root, candidate):
-            return candidate
-    return None
+        if not candidate:
+            continue
+        state = _workspace_file(source_root, candidate)
+        if state == "outside":
+            return None, True
+        if state == "file":
+            return candidate, False
+    return None, False
 
 
 def _is_poc_import(importer: str, imported: str) -> bool:
@@ -115,7 +129,11 @@ def _collect_poc_sources(
         except OSError:
             continue
         for specifier in relative_imports(source, poc_files[source]):
-            imported = _resolve_import(source_root, source, specifier)
+            imported, escapes = _resolve_import(source_root, source, specifier)
+            if escapes:
+                # Fail closed: code the engine cannot capture may hold setup mutations.
+                uncaptured.add(f"{_OUTSIDE}{specifier} (imported by {source})")
+                continue
             if imported is None or not _is_poc_import(source, imported):
                 continue
             if imported in captured_files:
@@ -146,7 +164,7 @@ def capture_evidence(
         )
     try:
         source_root = Path(repo_dir).resolve(strict=True)
-    except OSError as exc:
+    except _PATH_ERRORS as exc:
         return _capture_result(unresolved=declared, capture_complete=False, reason=f"workspace unavailable: {exc}")
     relative_dir = Path("poc-artifacts") / f"scan-{scan_id}" / f"finding-{finding_id}" / f"metadata-{metadata_id}"
     destination = Path(data_dir) / relative_dir
@@ -174,7 +192,7 @@ def capture_evidence(
                 target = temp_dir / name
                 shutil.copyfile(resolved, target)
                 target.chmod(0o600)
-            except (OSError, PocArtifactError) as exc:
+            except (*_PATH_ERRORS, PocArtifactError) as exc:
                 unresolved.append(raw)
                 reasons.append(f"{raw}: {exc}")
                 continue
@@ -193,7 +211,7 @@ def capture_evidence(
         if destination.exists():
             shutil.rmtree(destination)
         temp_dir.rename(destination)
-    except OSError as exc:
+    except Exception as exc:  # capture must never raise into the D4 run; always drop the temp dir
         shutil.rmtree(temp_dir, ignore_errors=True)
         return _capture_result(unresolved=declared, capture_complete=False, reason=f"artifact capture failed: {exc}")
     return _capture_result(

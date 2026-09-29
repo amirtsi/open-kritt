@@ -51,11 +51,11 @@ _JS_PATTERNS = (
 )
 _REGEX_PRECEDERS = frozenset("(,=:[!&|?{};+-*%<>~^")
 _SOL_IMPORT = re.compile(
-    r"\bimport\b\s*(?:[^;'\"]*?\bfrom\s*)?[\"']([^\"']+)[\"']",
+    r"\bimport\b\s*(?:[^;'\"]{0,500}?\bfrom\s*)?[\"']([^\"'\n]{1,500})[\"']",
 )
 _JS_IMPORT = re.compile(
-    r"\bimport\b\s*(?:[^;'\"`()]*?\bfrom\s*)?[\"']([^\"']+)[\"']"
-    r"|\b(?:import|require)\s*\(\s*[\"']([^\"']+)[\"']\s*\)",
+    r"\bimport\b\s*(?:[^;'\"`()]{0,500}?\bfrom\s*)?[\"']([^\"'\n]{1,500})[\"']"
+    r"|\b(?:import|require)\s*\(\s*[\"']([^\"'\n]{1,500})[\"']\s*\)",
 )
 
 

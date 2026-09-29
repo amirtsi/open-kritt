@@ -214,13 +214,65 @@ def test_non_test_helper_in_the_poc_tree_is_followed_when_captured(tmp_path):
     assert captured["cheatcode_sites"] == [{"site": "exploitkit/Setup.sol:2", "kind": "store"}]
 
 
-def test_imports_escaping_the_workspace_or_missing_are_ignored(tmp_path):
+def test_missing_imports_are_ignored(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "test").mkdir(parents=True)
+    (workspace / "test" / "A.t.sol").write_text('import "./Missing.t.sol";\n')
+    result = capture_paths(tmp_path, workspace, ["test/A.t.sol"])
+    assert result["uncaptured_poc_imports"] == []
+
+
+def test_imports_escaping_the_workspace_are_recorded_fail_closed(tmp_path):
     workspace = tmp_path / "ws"
     (workspace / "test").mkdir(parents=True)
     (tmp_path / "Outside.t.sol").write_text("contract O {}\n")
-    (workspace / "test" / "A.t.sol").write_text('import "../../Outside.t.sol";\nimport "./Missing.t.sol";\n')
+    (workspace / "test" / "Out.t.sol").symlink_to(tmp_path / "Outside.t.sol")
+    (workspace / "test" / "A.t.sol").write_text('import "../../Outside.t.sol";\nimport "./Out.t.sol";\n')
     result = capture_paths(tmp_path, workspace, ["test/A.t.sol"])
+    assert result["uncaptured_poc_imports"] == [
+        "<outside workspace>: ../../Outside.t.sol (imported by test/A.t.sol)",
+        "<outside workspace>: ./Out.t.sol (imported by test/A.t.sol)",
+    ]
+
+
+def no_temp_dirs(tmp_path):
+    return not list((tmp_path / "data").rglob("*.tmp"))
+
+
+def test_self_referencing_symlink_import_does_not_raise_or_leave_a_temp_dir(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "test").mkdir(parents=True)
+    (workspace / "test" / "Loop.sol").symlink_to("Loop.sol")
+    (workspace / "test" / "A.t.sol").write_text('import "./Loop.sol";\ncontract A {}\n')
+    result = capture_paths(tmp_path, workspace, ["test/A.t.sol"])
+    assert result["capture_complete"] is True
     assert result["uncaptured_poc_imports"] == []
+    assert no_temp_dirs(tmp_path)
+
+
+def test_nul_byte_import_does_not_raise_or_leave_a_temp_dir(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "test").mkdir(parents=True)
+    (workspace / "test" / "A.t.sol").write_text('import "./X\x00.sol";\ncontract A {}\n')
+    result = capture_paths(tmp_path, workspace, ["test/A.t.sol"])
+    assert result["capture_complete"] is True
+    assert result["uncaptured_poc_imports"] == []
+    assert no_temp_dirs(tmp_path)
+
+
+def test_unexpected_failure_returns_incomplete_and_removes_the_temp_dir(tmp_path, monkeypatch):
+    import open_kritt_engine.poc_artifacts as module
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(module, "_collect_poc_sources", boom)
+    workspace = tmp_path / "ws"
+    (workspace / "test").mkdir(parents=True)
+    (workspace / "test" / "A.t.sol").write_text("contract A {}\n")
+    result = capture_paths(tmp_path, workspace, ["test/A.t.sol"])
+    assert result["capture_complete"] is False and "unexpected" in result["reason"]
+    assert no_temp_dirs(tmp_path)
 
 
 def test_js_relative_requires_resolve_extensionless_helpers(tmp_path):

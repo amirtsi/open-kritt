@@ -160,3 +160,12 @@ def test_relative_imports_keep_only_relative_specifiers():
     js = "import { ethers } from 'hardhat';\nimport helpers from './helpers';\nconst b = require('../base.js');\n"
     js += "const c = require('chai');\n"
     assert relative_imports("test/a.test.js", js) == ["./helpers", "../base.js"]
+
+
+def test_relative_imports_stays_linear_on_hostile_input():
+    import time
+
+    started = time.monotonic()
+    relative_imports("test/A.t.sol", "import x " * 20000)
+    relative_imports("test/a.test.js", "import x " * 20000)
+    assert time.monotonic() - started < 2
