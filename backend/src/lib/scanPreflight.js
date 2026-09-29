@@ -98,6 +98,22 @@ export function scanPreflight({
         )
       );
     }
+    if (HIGH_VALUE_KINDS.has(configuration.investigation_kind)) {
+      const minimum = configuration.materiality_min_usd;
+      checks.push(
+        typeof minimum === 'number' && Number.isFinite(minimum) && minimum > 0
+          ? check(
+              'materiality',
+              'ok',
+              `Findings below $${minimum.toLocaleString('en-US')} cannot become submission-ready.`
+            )
+          : check(
+              'materiality',
+              'block',
+              'Set configuration.materiality_min_usd to a number: the smallest payout worth reporting (for example the program minimum for Critical). The readiness gate blocks dust and injected-fund findings against it.'
+            )
+      );
+    }
     const requested = Array.isArray(configuration.v27_after_d3) ? configuration.v27_after_d3.map(String) : [];
     const missing = optionalPostScripts.filter((script) => !requested.includes(`${script.id}`));
     if (missing.length) {

@@ -16,7 +16,7 @@ const scripts = Object.entries(V27_POST_SCRIPT_NAMES).map(([stage, name], index)
 }));
 
 test('the readiness policy identifier is the v2.7 impact gate', () => {
-  assert.equal(READINESS_POLICY_VERSION, 'v2.7-impact-gate-1');
+  assert.equal(READINESS_POLICY_VERSION, 'v2.7-impact-gate-2');
 });
 
 test('v2.7 resolves its three ordered post-processing stages and the readiness policy', async () => {

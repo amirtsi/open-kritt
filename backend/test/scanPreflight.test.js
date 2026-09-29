@@ -16,6 +16,7 @@ function input(overrides = {}) {
         known_issue_sources: ['audits/'],
         deployment_context: 'Vault 0xabc on Ethereum with fee 50 bps',
         v27_after_d3: ['2', '6'],
+        materiality_min_usd: 15000,
       },
       jobLimit: null,
     },
@@ -95,6 +96,40 @@ test('ungated workflows skip v2.7-only checks', () => {
   );
   assert.equal(checks.after_d3, undefined);
   assert.equal(checks.repeat_runs, undefined);
+});
+
+test('preflight blocks a bounty scan without materiality_min_usd', () => {
+  const base = input();
+  delete base.payload.configuration.materiality_min_usd;
+  const checks = scanPreflight(base);
+  const materiality = checks.find((c) => c.id === 'materiality');
+  assert.equal(materiality.level, 'block');
+  assert.match(materiality.message, /materiality_min_usd/);
+});
+
+test('preflight blocks a bounty scan with materiality_min_usd as a numeric string', () => {
+  const base = input();
+  base.payload.configuration.materiality_min_usd = '15000';
+  const checks = scanPreflight(base);
+  const materiality = checks.find((c) => c.id === 'materiality');
+  assert.equal(materiality.level, 'block');
+  assert.match(materiality.message, /number/);
+});
+
+test('preflight accepts a positive materiality_min_usd', () => {
+  const base = input();
+  base.payload.configuration.materiality_min_usd = 15000;
+  const materiality = scanPreflight(base).find((c) => c.id === 'materiality');
+  assert.equal(materiality.level, 'ok');
+});
+
+test('preflight does not require materiality for private audits', () => {
+  const base = input();
+  base.payload.configuration.investigation_kind = 'private_audit';
+  assert.equal(
+    scanPreflight(base).find((c) => c.id === 'materiality'),
+    undefined
+  );
 });
 
 test('preflight inputs come from the workflow shape, settings, and the research history', async () => {

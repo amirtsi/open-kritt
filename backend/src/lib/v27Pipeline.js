@@ -10,7 +10,7 @@ export const V27_GATED_WORKFLOW_NAMES = Object.freeze([
 // Identifier of the deterministic readiness policy the engine applies to
 // findings of the v2.7 workflow. Snapshotted into each gated scan's
 // configuration; the engine dispatches on the exact string.
-export const READINESS_POLICY_VERSION = 'v2.7-impact-gate-1';
+export const READINESS_POLICY_VERSION = 'v2.7-impact-gate-2';
 export const V27_POST_SCRIPT_NAMES = Object.freeze({
   d3: 'v2.7 D3 Hostile Canonical Verification',
   d4: 'v2.7 D4 Local PoC and Negative Control',
