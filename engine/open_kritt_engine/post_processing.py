@@ -1118,6 +1118,8 @@ class PostProcessor:
                 artifact_dir=str(capture.get("artifact_dir") or ""),
                 policy_version=policy_version,
                 legacy=False,
+                cheatcode_sites=capture.get("cheatcode_sites") or [],
+                poc_source_paths=capture.get("poc_source_paths") or [],
             )
         elif stage == "d5":
             d4 = prior.get("d4") if isinstance(prior.get("d4"), dict) else {}

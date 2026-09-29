@@ -525,6 +525,8 @@ def test_evidence_block_normalizes_paths_and_statuses():
         "lifecycle_status": "impact_proven",
         "policy_version": POLICY_VERSION,
         "legacy": False,
+        "cheatcode_sites": [],
+        "poc_source_paths": [],
     }
     partial_manifest = make_evidence(manifest={"poc.py"})
     assert partial_manifest["unresolved_paths"] == ["attack.log", "balances.json"]
@@ -635,3 +637,19 @@ def test_lifecycle_block_shape():
         "policy_version": POLICY_VERSION,
         "legacy": False,
     }
+
+
+def test_evidence_block_carries_cheatcode_fields():
+    block = evidence_block(
+        make_d4(),
+        make_manifest(),
+        capture_complete=True,
+        artifact_dir=ARTIFACT_DIR,
+        policy_version=POLICY_VERSION,
+        legacy=False,
+        cheatcode_sites=[{"site": "test/A.t.sol:3", "kind": "deal"}],
+        poc_source_paths=["test/A.t.sol"],
+    )
+    assert block["cheatcode_sites"] == [{"site": "test/A.t.sol:3", "kind": "deal"}]
+    assert block["poc_source_paths"] == ["test/A.t.sol"]
+    assert make_evidence()["cheatcode_sites"] == []

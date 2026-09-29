@@ -117,6 +117,8 @@ def test_no_declared_paths_is_complete_without_an_artifact_dir(tmp_path):
         "unresolved_paths": [],
         "capture_complete": True,
         "reason": "",
+        "cheatcode_sites": [],
+        "poc_source_paths": [],
     }
 
 
@@ -125,3 +127,29 @@ def test_missing_workspace_is_reported_not_raised(tmp_path):
     assert capture_result["capture_complete"] is False
     assert capture_result["artifact_dir"] == ""
     assert capture_result["reason"]
+
+
+def test_capture_records_cheatcode_sites_of_poc_sources_only(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "test").mkdir(parents=True)
+    (workspace / "src").mkdir()
+    (workspace / "test" / "Attack.t.sol").write_text("contract T {\n  function t() public { vm.deal(a, 1); }\n}\n")
+    (workspace / "src" / "Payments.sol").write_text(
+        "contract P { function k() public { selfdestruct(payable(a)); } }\n"
+    )
+    (workspace / "out.txt").write_text("ok\n")
+    result = capture_evidence(
+        str(tmp_path / "data"),
+        str(workspace),
+        scan_id=1,
+        finding_id=2,
+        metadata_id=3,
+        result={"poc_artifact_paths": ["test/Attack.t.sol", "src/Payments.sol", "out.txt"]},
+    )
+    assert result["poc_source_paths"] == ["test/Attack.t.sol"]
+    assert result["cheatcode_sites"] == [{"site": "test/Attack.t.sol:2", "kind": "deal"}]
+
+
+def test_capture_without_paths_has_empty_cheatcode_fields(tmp_path):
+    result = capture_evidence(str(tmp_path / "d"), str(tmp_path), scan_id=1, finding_id=2, metadata_id=3, result={})
+    assert result["cheatcode_sites"] == [] and result["poc_source_paths"] == []

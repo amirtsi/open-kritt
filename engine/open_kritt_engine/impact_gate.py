@@ -192,6 +192,8 @@ def evidence_block(
     artifact_dir: str,
     policy_version: str,
     legacy: bool,
+    cheatcode_sites: list | None = None,
+    poc_source_paths: list | None = None,
 ) -> dict[str, Any]:
     d4 = _dict(d4)
     bug_status = d4.get("bug_status")
@@ -224,6 +226,8 @@ def evidence_block(
         "lifecycle_status": "",
         "policy_version": policy_version,
         "legacy": bool(legacy),
+        "cheatcode_sites": [dict(row) for row in _rows(cheatcode_sites)],
+        "poc_source_paths": [path for path in _strings(poc_source_paths) if path],
     }
     block["lifecycle_status"] = lifecycle_status(None, block, None)
     return block

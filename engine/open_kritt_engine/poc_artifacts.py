@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .impact_gate import declared_evidence_paths, normalize_evidence_path
+from .poc_cheatcodes import cheatcode_sites, is_poc_source
 
 MAX_FILES = 20
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -26,6 +27,8 @@ def _capture_result(
     unresolved: list[str] | None = None,
     capture_complete: bool,
     reason: str = "",
+    cheatcode_sites: list | None = None,
+    poc_source_paths: list | None = None,
 ) -> dict[str, Any]:
     return {
         "artifact_dir": artifact_dir,
@@ -33,6 +36,8 @@ def _capture_result(
         "unresolved_paths": list(unresolved or []),
         "capture_complete": capture_complete,
         "reason": reason,
+        "cheatcode_sites": list(cheatcode_sites or []),
+        "poc_source_paths": list(poc_source_paths or []),
     }
 
 
@@ -122,6 +127,13 @@ def capture_evidence(
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 }
             )
+        poc_files: dict[str, str] = {}
+        for row in manifest:
+            if is_poc_source(row["source"]):
+                try:
+                    poc_files[row["source"]] = (temp_dir / row["file"]).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
         (temp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         if destination.exists():
             shutil.rmtree(destination)
@@ -135,4 +147,6 @@ def capture_evidence(
         unresolved=unresolved,
         capture_complete=not unresolved,
         reason="; ".join(reasons),
+        cheatcode_sites=cheatcode_sites(poc_files),
+        poc_source_paths=sorted(poc_files),
     )
