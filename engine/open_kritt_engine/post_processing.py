@@ -30,11 +30,10 @@ from .prompting import (
 from .runtime_config import runtime_int
 from .schema import EXTRACTOR_HELPER_FIELD, OutputValidationError, output_schema, strip_reserved_keys, validate_payload
 from .v27_pipeline import (
-    d4_eligibility_sql,
-    d5_eligibility_sql,
     pipeline_ids,
     preceding_results,
     prior_results,
+    stage_condition,
     stage_for_script,
 )
 from .workspace import (
@@ -1119,6 +1118,9 @@ class PostProcessor:
                 artifact_dir=str(capture.get("artifact_dir") or ""),
                 policy_version=policy_version,
                 legacy=False,
+                cheatcode_sites=capture.get("cheatcode_sites") or [],
+                poc_source_paths=capture.get("poc_source_paths") or [],
+                uncaptured_poc_imports=capture.get("uncaptured_poc_imports") or [],
             )
         elif stage == "d5":
             d4 = prior.get("d4") if isinstance(prior.get("d4"), dict) else {}
@@ -1173,12 +1175,11 @@ class PostProcessor:
             pipeline = pipeline_ids(current)
             for candidate_script in post_scripts:
                 script_id = _int(candidate_script["id"])
-                stage = stage_for_script(current, script_id)
+                predicate, gating_script_id = stage_condition(current, script_id)
                 condition = ""
                 condition_args: list[Any] = []
-                if stage in {"d4", "d5"}:
+                if predicate is not None:
                     # Predicates are built from the gate constants only (no user input reaches the SQL text).
-                    predicate = d4_eligibility_sql() if stage == "d4" else d5_eligibility_sql()
                     condition = f"""
                       AND EXISTS (
                         SELECT 1 FROM workflows.vulnerability_enrichments prior
@@ -1189,7 +1190,7 @@ class PostProcessor:
                           AND {predicate}
                       )
                     """
-                    condition_args.append(pipeline["d3" if stage == "d4" else "d4"])
+                    condition_args.append(gating_script_id)
                 candidate_row = conn.execute(
                     f"""
                     SELECT v.*
@@ -1229,7 +1230,7 @@ class PostProcessor:
             prompt_template = post_script["content"]
             stage = stage_for_script(current, _int(post_script["id"]))
             prior: dict[str, Any] = {}
-            if stage in {"d4", "d5"}:
+            if stage in {"d4", "d5", "after_d3"}:
                 prior_rows = conn.execute(
                     """SELECT post_script_id, result, stub
                        FROM workflows.vulnerability_enrichments

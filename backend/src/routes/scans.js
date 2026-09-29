@@ -21,9 +21,13 @@ import { assertModelSelectionAvailable } from '../lib/modelSelection.js';
 import { lockWorkflowForScan } from '../lib/workflowLocks.js';
 import { lockPostScriptForScan } from '../lib/postScriptLocks.js';
 import { lockAgentSkillForScan } from '../lib/agentSkillLocks.js';
-import { resolveV27Pipeline } from '../lib/v27Pipeline.js';
+import { resolveV27Pipeline, v27PostScriptOrder } from '../lib/v27Pipeline.js';
+import { loadPreflightInputs, scanPreflight } from '../lib/scanPreflight.js';
+import { readRuntimeSettings } from '../lib/runtimeSettings.js';
 import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
+import { selectResearchScans } from '../lib/researchScope.js';
+import { loadScanLive } from '../lib/scanLive.js';
 import {
   createFindingExport,
   createFindingExportLimiter,
@@ -710,6 +714,47 @@ export async function deleteScanIfSafe(tx, scanId) {
 }
 
 // GET /api/scans?status=running
+export function researchScanPage(selection, pagination) {
+  const pageScans = selection.scans.slice(pagination.skip, pagination.skip + pagination.pageSize);
+  const totalItems = selection.scans.length;
+  return {
+    pageScans,
+    body: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalItems,
+      totalPages: Math.max(1, Math.ceil(totalItems / pagination.pageSize)),
+      startIndex: pagination.skip,
+      endIndex: pagination.skip + pageScans.length,
+      runningCount: selection.runningCount,
+      research: selection.research,
+    },
+  };
+}
+
+export function scanPreflightHandler({ loadInputs }) {
+  return async (req, res, next) => {
+    try {
+      const payload = req.body || {};
+      if (!/^\d+$/.test(`${payload.workflowId ?? ''}`)) {
+        return res.status(400).json({ error: 'workflowId is required.' });
+      }
+      const inputs = await loadInputs(payload);
+      res.json({ checks: scanPreflight({ ...inputs, payload }) });
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
+// POST /api/scans/preflight: launch checklist for a scan payload, without creating it.
+router.post(
+  '/preflight',
+  scanPreflightHandler({
+    loadInputs: (payload) => loadPreflightInputs(prisma, payload, { readSettings: readRuntimeSettings }),
+  })
+);
+
 router.get('/', async (req, res, next) => {
   try {
     const { status } = req.query;
@@ -717,6 +762,20 @@ router.get('/', async (req, res, next) => {
     if (status === 'running') where.status = { in: ACTIVE_SCAN_STATUSES };
     else if (status && status !== 'all') where.status = status;
     const pagination = scanListPagination(req.query);
+    if (req.query.research !== undefined) {
+      // Research grouping is derived from scan configuration, so it is applied in
+      // memory over the (small) scan table rather than in SQL.
+      const selection = selectResearchScans(await prisma.scan.findMany(), {
+        research: `${req.query.research}`,
+        status: status || 'all',
+        activeStatuses: ACTIVE_SCAN_STATUSES,
+      });
+      const { pageScans, body } = researchScanPage(
+        selection,
+        pagination || { page: 1, pageSize: Math.max(1, selection.scans.length), skip: 0 }
+      );
+      return res.json({ items: await assembleScans(pageScans), ...body });
+    }
     if (!pagination) {
       const scans = await prisma.scan.findMany({ where, orderBy: SCAN_LIST_ORDER });
       return res.json(await assembleScans(scans));
@@ -758,6 +817,31 @@ router.get('/:id', async (req, res, next) => {
     next(e);
   }
 });
+
+export function scanLiveHandler({ findScan, load }) {
+  return async (req, res, next) => {
+    try {
+      if (!/^\d+$/.test(`${req.params.id}`)) return res.status(400).json({ error: 'Scan id must be a number.' });
+      const scan = await findScan(BigInt(req.params.id));
+      if (!scan) return res.status(404).json({ error: 'Scan not found.' });
+      res.json(await load(scan));
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
+// GET /api/scans/:id/live: verified-findings funnel, activity, and dropout reasons.
+router.get(
+  '/:id/live',
+  scanLiveHandler({
+    findScan: (id) => prisma.scan.findUnique({ where: { id } }),
+    load: async (scan) => {
+      const assembled = await assembleScan(scan);
+      return loadScanLive(prisma, scan, { activeJobs: assembled.statusSummary?.activeJobs || [], now: new Date() });
+    },
+  })
+);
 
 // GET /api/scans/:id/graph — workflow step nodes, lineage edges, and the
 // post-processing funnel for the scan graph view.
@@ -997,13 +1081,15 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    const v27Pipeline = await resolveV27Pipeline(prisma, valid.workflowId);
+    const v27Pipeline = await resolveV27Pipeline(prisma, valid.workflowId, {
+      afterD3: valid.configuration?.v27_after_d3,
+    });
     const investigation = investigationKindForScan(valid.configuration, v27Pipeline);
     if (investigation.errors.length) throw new ValidationError(investigation.errors);
     const configurationObject = investigation.configuration;
     const primaryPostScriptId = v27Pipeline?.d3 ?? `${valid.postScriptId}`;
     const configuredPostScriptIds = v27Pipeline
-      ? [v27Pipeline.d3, v27Pipeline.d4, v27Pipeline.d5]
+      ? v27PostScriptOrder(v27Pipeline)
       : [
           ...new Set(
             [
@@ -1131,7 +1217,16 @@ router.post('/', async (req, res, next) => {
           configuration: {
             ...configurationObject,
             post_script_ids: configuredPostScriptIds,
-            ...(v27Pipeline ? { v27_pipeline: { d3: v27Pipeline.d3, d4: v27Pipeline.d4, d5: v27Pipeline.d5 } } : {}),
+            ...(v27Pipeline
+              ? {
+                  v27_pipeline: {
+                    d3: v27Pipeline.d3,
+                    d4: v27Pipeline.d4,
+                    d5: v27Pipeline.d5,
+                    ...(v27Pipeline.afterD3.length ? { after_d3: v27Pipeline.afterD3 } : {}),
+                  },
+                }
+              : {}),
             agent_skill_ids: configuredAgentSkillIds,
             post_processing_thinking_effort: valid.postProcessingThinkingEffort,
             ...(valid.postProcessingModelOverride

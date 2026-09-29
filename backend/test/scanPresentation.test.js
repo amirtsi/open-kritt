@@ -589,6 +589,10 @@ test('workflow serialization exposes the readiness gate only for the v2.7 workfl
   const gated = serializeWorkflow({ ...base, name: V27_WORKFLOW_NAME }, [step]);
   assert.equal(gated.readinessGate, READINESS_POLICY_VERSION);
   assert.equal(serializeWorkflow({ ...base, name: 'Other flow' }, [step]).readinessGate, null);
+  assert.equal(
+    serializeWorkflow({ ...base, name: 'Solidity Vault Bug-Class Review v2.8' }, [step]).readinessGate,
+    READINESS_POLICY_VERSION
+  );
   // Serialized output formats keep nested descriptors and legacy type-only meaning.
   assert.deepEqual(gated.steps[0].outputFormat, { impact_chain: { type: 'array', items: 'string' }, paths: 'array' });
 });

@@ -6,6 +6,8 @@ from open_kritt_engine.v27_pipeline import (
     eligible_for_stage,
     pipeline_ids,
     preceding_results,
+    stage_condition,
+    stage_for_script,
 )
 
 
@@ -66,3 +68,34 @@ def test_eligibility_sql_is_built_from_the_gate_constants():
     assert "poc_status" not in d5_sql
     assert d5_eligibility_sql("e.result").count("e.result->'_engine_evidence'") == 4
     assert "%s" not in d5_sql
+
+
+def scan_with_extras(extras):
+    return {"configuration": {"v27_pipeline": {"d3": "11", "d4": "12", "d5": "13", "after_d3": extras}}}
+
+
+def test_after_d3_scripts_run_only_on_findings_d3_kept():
+    current = scan_with_extras(["2", "6"])
+    assert stage_for_script(current, 2) == "after_d3"
+    assert stage_for_script(current, 6) == "after_d3"
+    assert not eligible_for_stage(current, 2, {})
+    assert not eligible_for_stage(current, 2, {11: {"verdict": "false_positive"}})
+    assert eligible_for_stage(current, 6, {11: {"verdict": "confirmed"}})
+    assert preceding_results(current, 2, {11: {"verdict": "confirmed"}}) == {"d3": {"verdict": "confirmed"}}
+
+
+def test_after_d3_ignores_pipeline_ids_and_malformed_entries():
+    current = scan_with_extras(["11", "12", "x", -4, "2", "2"])
+    assert stage_for_script(current, 11) == "d3"
+    assert stage_for_script(current, 12) == "d4"
+    assert stage_for_script(current, 2) == "after_d3"
+    assert stage_for_script(current, 99) is None
+
+
+def test_stage_condition_gates_each_stage_on_its_predecessor():
+    current = scan_with_extras(["2"])
+    assert stage_condition(current, 11) == (None, None)
+    assert stage_condition(current, 2) == (d4_eligibility_sql(), 11)
+    assert stage_condition(current, 12) == (d4_eligibility_sql(), 11)
+    assert stage_condition(current, 13) == (d5_eligibility_sql(), 12)
+    assert stage_condition({"configuration": {}}, 2) == (None, None)

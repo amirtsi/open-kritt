@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { assembleScans } from '../lib/repo.js';
+import { scanResearchKey } from '../lib/researchScope.js';
+
+export { scanResearchKey };
+import { verifiedCountsByScan } from '../lib/scanLive.js';
 
 const router = Router();
 
@@ -19,11 +23,14 @@ export function summarizeCanonicalFindings(vulnerabilities) {
   return { findingsCount, exploitableCount };
 }
 
-export function scanResearchKey(scan) {
-  const configuration = scan?.configuration && typeof scan.configuration === 'object' ? scan.configuration : {};
-  const identity = configuration.research_id || configuration.program || scan?.repoFull || scan?.id;
-  const kind = configuration.benchmark_mode === true ? 'benchmark' : 'research';
-  return `${identity}::${kind}`;
+export function sumVerifiedCounts(countsByScan) {
+  let keptCount = 0;
+  let impactProvenCount = 0;
+  for (const counts of countsByScan.values()) {
+    keptCount += counts.kept;
+    impactProvenCount += counts.impactProven;
+  }
+  return { keptCount, impactProvenCount };
 }
 
 // GET /api/overview — KPIs + recent scans for the dashboard.
@@ -50,6 +57,7 @@ router.get('/', async (req, res, next) => {
         })
       : [];
     const { findingsCount, exploitableCount } = summarizeCanonicalFindings(focusVulns);
+    const { keptCount, impactProvenCount } = sumVerifiedCounts(await verifiedCountsByScan(prisma, researchRaw));
     const representatives = [];
     const seenResearch = new Set();
     for (const scan of recentRaw) {
@@ -70,6 +78,8 @@ router.get('/', async (req, res, next) => {
       runningCount,
       findingsCount,
       exploitableCount,
+      keptCount,
+      impactProvenCount,
       focusScan: focusScans[0] || null,
       recentScans: researchScans,
       availableScans,

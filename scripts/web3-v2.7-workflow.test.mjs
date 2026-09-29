@@ -318,3 +318,63 @@ test('v2.7 D3 and D5 tie novelty verification to the known-issues corpus', async
     assert.match(content, /unreadable[^.]*unverified/i, `${file} must keep unreadable sources unverified`);
   }
 });
+
+test('v2.7 D2 marks exploitable by attacker path, not by unverified deployment facts', async () => {
+  const { workflow } = JSON.parse(await readFile(workflowPath, 'utf8'));
+  const investigators = workflow.levels.find((level) => level.depth === 2).steps;
+  assert.equal(investigators.length, 3);
+  for (const step of investigators) {
+    assert.match(step.content, /exploitable=true when the code shows an unprivileged, actor-controlled path/);
+    assert.match(step.content, /record unverified deployment facts[^.]*as assumptions in coverage_gap/);
+    assert.match(step.content, /exploitable=false when the path requires a trusted or privileged role/);
+    assert.doesNotMatch(step.content, /exploitable=true only for an established actor-controlled end-to-end trigger/);
+    assert.doesNotMatch(step.content, /or unverified deployed state IS a concrete candidate/);
+  }
+});
+
+test('v2.7 D4 reports PoC economics for the economic reality gate', async () => {
+  const { 'd4-local-poc.post-script.json': d4 } = await loadPostScripts();
+  const f = d4.outputFormat;
+  assert.deepEqual(Object.keys(f.setup_mutations.items.fields).sort(), ['beneficiary_role', 'justification', 'kind', 'site']);
+  assert.deepEqual(f.setup_mutations.items.fields.beneficiary_role.enum, [
+    'attacker', 'victim_user', 'protocol_contract', 'privileged_role', 'third_party', 'time',
+  ]);
+  assert.deepEqual(Object.keys(f.attacker_pnl.fields).sort(), ['asset', 'attacker_in', 'attacker_out', 'net_positive']);
+  assert.equal(f.victim_loss.items.fields.preexisting_on_fork, 'boolean');
+  assert.deepEqual(Object.keys(f.privileged_calls.items.fields).sort(), ['function', 'role', 'site']);
+  for (const rule of [/every cheatcode/i, /preexisting_on_fork/, /protocol_contract/, /live deployment/i]) {
+    assert.match(d4.content, rule);
+  }
+});
+
+test('v2.7 D4 names every scanned cheatcode form and the PoC capture duties', async () => {
+  const { 'd4-local-poc.post-script.json': d4 } = await loadPostScripts();
+  for (const form of [
+    'checked_write', 'mockCall', 'mockCallRevert', 'changePrank', 'startHoax', 'hevm.store', 'cheats.deal',
+    'anvil_setBalance', 'anvil_setStorageAt', 'anvil_impersonateAccount', 'hardhat_setCode', 'anvil_setCode',
+    'evm_increaseTime', 'evm_mine', 'time.increase',
+  ]) {
+    assert.ok(d4.content.includes(form), form);
+  }
+  assert.match(d4.content, /Foundry test \(a \.t\.sol file\) or a Hardhat JavaScript\/TypeScript test/);
+  assert.match(d4.content, /every helper, base, or setup file the test imports/);
+  assert.match(d4.content, /exactly the same workspace-relative path you listed in poc_artifact_paths/);
+  assert.match(d4.content, /outside a normal protocol entry-point call/);
+  assert.match(d4.content, /at the location the attack takes them from/);
+});
+
+test('v2.7 D5 reports reality checks for the economic reality gate', async () => {
+  const { 'd5-report-readiness.post-script.json': d5 } = await loadPostScripts();
+  const f = d5.outputFormat;
+  assert.deepEqual(f.upstream_fix.fields.status.enum, ['none_found', 'fixed_upstream', 'documented_known']);
+  assert.deepEqual(f.precondition_live.fields.status.enum, ['present_now', 'absent_now', 'unknown']);
+  assert.equal(f.materiality.fields.usd_affected, 'number');
+  for (const rule of [/all branches/i, /usd_affected/, /preexisting_on_fork: true/]) assert.match(d5.content, rule);
+  assert.match(d5.content, /threshold_usd to the scan configuration materiality_min_usd, or 0 when/);
+});
+
+test('v2.7 D3 asks the live-state and privileged-trigger questions', async () => {
+  const { 'd3-hostile-verification.post-script.json': d3 } = await loadPostScripts();
+  assert.match(d3.content, /present on the live chain now/i);
+  assert.match(d3.content, /privileged role/i);
+});

@@ -275,6 +275,10 @@ export class HeadlessApiClient {
     return this.request('/scans', { method: 'POST', body });
   }
 
+  scanPreflight(body) {
+    return this.request('/scans/preflight', { method: 'POST', body });
+  }
+
   updateScan(id, body) {
     return this.request(`/scans/${encodeURIComponent(id)}`, { method: 'PATCH', body });
   }
@@ -531,6 +535,18 @@ async function chooseDependencies(prompter, localRepos) {
   return dependencies;
 }
 
+// Non-ok launch checks for a payload. Older backends without the preflight
+// endpoint simply return no checks.
+async function launchChecklist(client, payload) {
+  if (typeof client.scanPreflight !== 'function') return [];
+  try {
+    const result = await client.scanPreflight(payload);
+    return (result?.checks || []).filter((check) => check.level !== 'ok');
+  } catch {
+    return [];
+  }
+}
+
 export async function createScanInteractively({ client, prompter, io = defaultIo(), rootDir = process.cwd() }) {
   setSection(prompter, 'Create scan', 'Guided scan setup');
   showLoading(prompter, io, 'Loading workflows, models, and reusable scan resources…');
@@ -699,6 +715,19 @@ export async function createScanInteractively({ client, prompter, io = defaultIo
     `Skills: ${selectedSkills.length}`,
     `Rankers: ${selectedRankers.length}${customRanker ? ' + custom rules' : ''}`,
   ];
+  const launchChecks = await launchChecklist(client, payload);
+  launchChecks.forEach((check) =>
+    summaryLines.push({
+      text: `${check.level.toUpperCase()}: ${check.message}`,
+      tone: check.level === 'info' ? undefined : 'warning',
+    })
+  );
+  if (launchChecks.some((check) => check.level === 'block')) {
+    write(io);
+    write(io, 'Launch checklist blocked this scan:');
+    launchChecks.forEach((check) => write(io, `  ${check.level.toUpperCase()}: ${check.message}`));
+    return null;
+  }
   if (
     !setNextContext(prompter, {
       title: 'Review and launch',
@@ -712,7 +741,7 @@ export async function createScanInteractively({ client, prompter, io = defaultIo
   ) {
     write(io);
     write(io, 'Scan summary');
-    summaryLines.slice(1).forEach((line) => write(io, `  ${line}`));
+    summaryLines.slice(1).forEach((line) => write(io, `  ${typeof line === 'string' ? line : line.text}`));
   }
   if (!(await prompter.confirm('Create this scan?', { defaultValue: true }))) return null;
 
