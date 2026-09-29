@@ -347,6 +347,22 @@ test('v2.7 D4 reports PoC economics for the economic reality gate', async () => 
   }
 });
 
+test('v2.7 D4 names every scanned cheatcode form and the PoC capture duties', async () => {
+  const { 'd4-local-poc.post-script.json': d4 } = await loadPostScripts();
+  for (const form of [
+    'checked_write', 'mockCall', 'mockCallRevert', 'changePrank', 'startHoax', 'hevm.store', 'cheats.deal',
+    'anvil_setBalance', 'anvil_setStorageAt', 'anvil_impersonateAccount', 'hardhat_setCode', 'anvil_setCode',
+    'evm_increaseTime', 'evm_mine', 'time.increase',
+  ]) {
+    assert.ok(d4.content.includes(form), form);
+  }
+  assert.match(d4.content, /Foundry test \(a \.t\.sol file\) or a Hardhat JavaScript\/TypeScript test/);
+  assert.match(d4.content, /every helper, base, or setup file the test imports/);
+  assert.match(d4.content, /exactly the same workspace-relative path you listed in poc_artifact_paths/);
+  assert.match(d4.content, /outside a normal protocol entry-point call/);
+  assert.match(d4.content, /at the location the attack takes them from/);
+});
+
 test('v2.7 D5 reports reality checks for the economic reality gate', async () => {
   const { 'd5-report-readiness.post-script.json': d5 } = await loadPostScripts();
   const f = d5.outputFormat;
@@ -354,6 +370,7 @@ test('v2.7 D5 reports reality checks for the economic reality gate', async () =>
   assert.deepEqual(f.precondition_live.fields.status.enum, ['present_now', 'absent_now', 'unknown']);
   assert.equal(f.materiality.fields.usd_affected, 'number');
   for (const rule of [/all branches/i, /usd_affected/, /preexisting_on_fork: true/]) assert.match(d5.content, rule);
+  assert.match(d5.content, /threshold_usd to the scan configuration materiality_min_usd, or 0 when/);
 });
 
 test('v2.7 D3 asks the live-state and privileged-trigger questions', async () => {
