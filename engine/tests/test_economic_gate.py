@@ -179,3 +179,116 @@ def test_private_audit_skips_threshold_and_privilege_rules():
     d4["privileged_calls"] = [{"site": SITE, "role": "owner", "function": "setFee"}]
     r = run(d4=d4, threshold=None, kind="private_audit")
     assert r["checks"]["economic_reality"] == "pass" and r["checks"]["reality_context"] == "pass"
+
+
+# --- fix round 1: fail-closed on malformed evidence -------------------------
+
+
+def test_c4_rejects_nan_usd_affected():
+    d5 = good_d5()
+    d5["materiality"] = {**d5["materiality"], "usd_affected": float("nan")}
+    r = run(d5=d5)
+    assert r["checks"]["reality_context"] == "fail"
+    assert "not a finite number" in reasons(r)
+
+
+def test_c4_rejects_string_nan_usd_affected():
+    d5 = good_d5()
+    d5["materiality"] = {**d5["materiality"], "usd_affected": "NaN"}
+    r = run(d5=d5)
+    assert r["checks"]["reality_context"] == "fail"
+    assert "not a finite number" in reasons(r)
+
+
+def test_c4_rejects_string_threshold():
+    r = run(threshold="nan")
+    assert r["checks"]["reality_context"] == "fail"
+    assert "materiality_min_usd" in reasons(r)
+
+
+def test_c4_rejects_boolean_threshold():
+    r = run(threshold=True)
+    assert r["checks"]["reality_context"] == "fail"
+    assert "materiality_min_usd" in reasons(r)
+
+
+def test_c4_rejects_boolean_usd_affected():
+    d5 = good_d5()
+    d5["materiality"] = {**d5["materiality"], "usd_affected": True}
+    r = run(d5=d5)
+    assert r["checks"]["reality_context"] == "fail"
+    assert "not a finite number" in reasons(r)
+
+
+def test_e6_string_row_in_privileged_calls_still_blocks():
+    d4 = good_d4()
+    d4["privileged_calls"] = ["owner: setReward()"]
+    r = run(d4=d4)
+    assert r["checks"]["economic_reality"] == "fail"
+    assert "privileged" in reasons(r)
+
+
+def test_e1_rejects_non_dict_victim_loss_row():
+    d4 = good_d4()
+    d4["victim_loss"] = ["vault lost 100 WETH"]
+    r = run(d4=d4)
+    assert r["checks"]["economic_reality"] == "fail"
+    assert "victim_loss" in reasons(r)
+
+
+def test_e1_rejects_stringly_typed_net_positive_for_non_funds_family():
+    d3 = make_d3()
+    d3["impact_family"] = "confidentiality_loss"
+    d4 = good_d4()
+    d4["attacker_pnl"] = {"asset": "WETH", "attacker_in": "1", "attacker_out": "101", "net_positive": "true"}
+    r = evaluate_readiness(
+        scan=scan(),
+        d3=d3,
+        d4=d4,
+        evidence=evidence(d4),
+        d5=good_d5(),
+        evaluated_at=EVALUATED_AT,
+    )
+    assert r["checks"]["economic_reality"] == "fail"
+    assert "net_positive" in reasons(r)
+
+
+def test_e1_rejects_unparseable_declared_site():
+    d4 = good_d4()
+    d4["setup_mutations"][0]["site"] = "not-a-site"
+    r = run(d4=d4, sites=())
+    assert r["checks"]["economic_reality"] == "fail"
+    assert "not-a-site" in reasons(r)
+
+
+def test_c1_rejects_unknown_upstream_status():
+    d5 = good_d5()
+    d5["upstream_fix"] = {"status": "definitely_maybe", "evidence": "asked the team"}
+    r = run(d5=d5)
+    assert r["checks"]["reality_context"] == "fail"
+    assert "definitely_maybe" in reasons(r)
+
+
+def test_e5_alone_for_permanent_freezing():
+    d3 = make_d3()
+    d3["impact_family"] = "permanent_freezing"
+    d4 = good_d4()
+    d4["victim_loss"][0]["preexisting_on_fork"] = False
+    r = evaluate_readiness(
+        scan=scan(),
+        d3=d3,
+        d4=d4,
+        evidence=evidence(d4),
+        d5=good_d5(),
+        evaluated_at=EVALUATED_AT,
+    )
+    assert r["checks"]["economic_reality"] == "fail"
+    assert "preexisting" in reasons(r)
+
+
+def test_e6_for_audit_competition():
+    d4 = good_d4()
+    d4["privileged_calls"] = [{"site": SITE, "role": "owner", "function": "setFee"}]
+    r = run(d4=d4, kind="audit_competition")
+    assert r["checks"]["economic_reality"] == "fail"
+    assert "privileged" in reasons(r)

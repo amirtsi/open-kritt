@@ -6,6 +6,7 @@ this module enforces structure, provenance, consistency, and readiness rules and
 claims to prove the semantic truth of an artifact.
 """
 
+import math
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -62,8 +63,11 @@ READINESS_CHECKS = (
 FUNDS_FAMILIES = frozenset({"funds_loss"})
 VALUE_FAMILIES = frozenset({"funds_loss", "permanent_freezing", "temporary_freezing"})
 MUTATION_ROLES = ("attacker", "victim_user", "protocol_contract", "privileged_role", "third_party", "time")
+MUTATION_KINDS = frozenset({"deal", "store", "etch", "prank", "selfdestruct_fund", "time", "other"})
 UPSTREAM_OK = "none_found"
+UPSTREAM_STATUSES = frozenset({"none_found", "fixed_upstream", "documented_known"})
 PRECONDITION_OK = "present_now"
+PRECONDITION_STATUSES = frozenset({"present_now", "absent_now", "unknown"})
 LEGACY_REASON = (
     "Investigation kind and readiness policy were not explicitly selected when this legacy scan was created."
 )
@@ -85,6 +89,20 @@ def _rows(value: Any) -> list[dict[str, Any]]:
 
 def _strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def _finite_number(value: Any) -> float | None:
+    """A real, finite int/float. Rejects bool (a bool subclasses int) and any string spelling."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _format_usd(value: float) -> str:
+    if -0.01 < value < 0.01:
+        return "< $0.01" if value >= 0 else "> -$0.01"
+    return f"${value:,.2f}"
 
 
 def normalize_evidence_path(raw: Any) -> str | None:
@@ -351,31 +369,83 @@ def _material_open_assumptions(d3: dict[str, Any], d4: dict[str, Any]) -> list[s
     return [key for key, row in merged.items() if row.get("material") is True and row.get("status") == "open"]
 
 
+def _string_field_reasons(row: dict[str, Any], fields: tuple[str, ...], label: str) -> list[str]:
+    return [
+        f"{label} has a non-string {field}."
+        for field in fields
+        if not isinstance(row.get(field), str) or not row.get(field).strip()
+    ]
+
+
 def economic_reasons(*, d3: dict[str, Any], d4: dict[str, Any], evidence: dict[str, Any], kind: str) -> list[str]:
     from .poc_cheatcodes import normalize_site
 
     reasons: list[str] = []
-    mutations = _rows(d4.get("setup_mutations"))
-    pnl = _dict(d4.get("attacker_pnl"))
-    losses = _rows(d4.get("victim_loss"))
-    privileged = _rows(d4.get("privileged_calls"))
+    raw_mutations = d4.get("setup_mutations")
+    raw_pnl = d4.get("attacker_pnl")
+    raw_losses = d4.get("victim_loss")
+    raw_privileged = d4.get("privileged_calls")
+
+    # E1: presence
     if (
-        not isinstance(d4.get("setup_mutations"), list)
-        or not pnl
-        or not isinstance(d4.get("victim_loss"), list)
-        or not isinstance(d4.get("privileged_calls"), list)
+        not isinstance(raw_mutations, list)
+        or not isinstance(raw_pnl, dict)
+        or not raw_pnl
+        or not isinstance(raw_losses, list)
+        or not isinstance(raw_privileged, list)
     ):
         reasons.append("D4 did not report setup_mutations, attacker_pnl, victim_loss and privileged_calls.")
+
+    mutations = _rows(raw_mutations) if isinstance(raw_mutations, list) else []
+    if isinstance(raw_mutations, list) and len(mutations) != len(raw_mutations):
+        reasons.append("D4 setup_mutations contains a non-object entry.")
+    losses = _rows(raw_losses) if isinstance(raw_losses, list) else []
+    if isinstance(raw_losses, list) and len(losses) != len(raw_losses):
+        reasons.append("D4 victim_loss contains a non-object entry.")
+    privileged = _rows(raw_privileged) if isinstance(raw_privileged, list) else []
+    if isinstance(raw_privileged, list) and len(privileged) != len(raw_privileged):
+        reasons.append("D4 privileged_calls contains a non-object entry.")
+    pnl = raw_pnl if isinstance(raw_pnl, dict) else {}
+
+    # E1: attacker_pnl schema (every family, not only funds_loss)
+    if pnl:
+        reasons.extend(_string_field_reasons(pnl, ("asset", "attacker_in", "attacker_out"), "D4 attacker_pnl"))
+        if not isinstance(pnl.get("net_positive"), bool):
+            reasons.append("D4 attacker_pnl.net_positive is not a boolean.")
+
+    # E1: victim_loss schema
+    for row in losses:
+        label = f"D4 victim_loss entry '{_text(row.get('party')) or 'unknown'}'"
+        reasons.extend(_string_field_reasons(row, ("party", "asset", "amount"), label))
+        if not isinstance(row.get("preexisting_on_fork"), bool):
+            reasons.append(f"{label} preexisting_on_fork is not a boolean.")
+        if not isinstance(row.get("evidence_paths"), list):
+            reasons.append(f"{label} evidence_paths is not a list.")
+
+    # E1: setup_mutations schema
     for row in mutations:
+        site_label = _text(row.get("site")) or "unknown"
+        if normalize_site(row.get("site")) is None:
+            reasons.append(f"Setup mutation site '{site_label}' is not a valid path:line reference.")
+        if row.get("kind") not in MUTATION_KINDS:
+            reasons.append(f"Setup mutation at '{site_label}' has an unknown kind.")
         if row.get("beneficiary_role") not in MUTATION_ROLES:
-            reasons.append(f"Setup mutation at '{_text(row.get('site'))}' has an unknown beneficiary_role.")
+            reasons.append(f"Setup mutation at '{site_label}' has an unknown beneficiary_role.")
+
+    # E1: privileged_calls schema
+    for row in privileged:
+        label = f"D4 privileged_calls entry '{_text(row.get('site')) or 'unknown'}'"
+        reasons.extend(_string_field_reasons(row, ("site", "role", "function"), label))
+
     # E2
     if not _strings(evidence.get("poc_source_paths")):
         reasons.append("PoC source was not captured, so its setup mutations cannot be verified.")
     declared = {normalize_site(row.get("site")) for row in mutations} - {None}
-    undeclared = sorted({_text(row.get("site")) for row in _rows(evidence.get("cheatcode_sites"))} - declared)
+    found = {normalize_site(row.get("site")) for row in _rows(evidence.get("cheatcode_sites"))} - {None}
+    undeclared = sorted(found - declared)
     if undeclared:
         reasons.append("PoC cheatcode sites are not declared in setup_mutations: " + ", ".join(undeclared) + ".")
+
     # E3
     injected = [_text(row.get("site")) for row in mutations if row.get("beneficiary_role") == "protocol_contract"]
     if injected:
@@ -393,42 +463,78 @@ def economic_reasons(*, d3: dict[str, Any], d4: dict[str, Any], evidence: dict[s
     # E5
     if family in VALUE_FAMILIES and not any(row.get("preexisting_on_fork") is True for row in losses):
         reasons.append("No victim loss is of funds preexisting on the fork; injected funds do not count.")
-    # E6
+    # E6: any non-empty privileged_calls list counts, even with malformed (non-dict) rows
     if kind in HIGH_VALUE_KINDS:
         roles = [row for row in mutations if row.get("beneficiary_role") == "privileged_role"]
-        if privileged or roles:
-            sites = [_text(row.get("site")) for row in [*privileged, *roles]]
+        if raw_privileged or roles:
+            sites = [_text(row.get("site")) for row in privileged if _text(row.get("site"))]
+            sites.extend(_text(row.get("site")) for row in roles if _text(row.get("site")))
+            if not sites:
+                sites = ["unspecified site"]
             reasons.append("The attack path needs a privileged actor (" + ", ".join(sites) + ").")
     return reasons
 
 
 def context_reasons(*, d5: dict[str, Any], kind: str, threshold: Any) -> list[str]:
     reasons: list[str] = []
-    upstream = _dict(d5.get("upstream_fix"))
-    live = _dict(d5.get("precondition_live"))
-    materiality = _dict(d5.get("materiality"))
-    if not upstream or not live or not materiality:
+    raw_upstream = d5.get("upstream_fix")
+    raw_live = d5.get("precondition_live")
+    raw_materiality = d5.get("materiality")
+
+    # C1: presence
+    if (
+        not isinstance(raw_upstream, dict)
+        or not raw_upstream
+        or not isinstance(raw_live, dict)
+        or not raw_live
+        or not isinstance(raw_materiality, dict)
+        or not raw_materiality
+    ):
         reasons.append("D5 did not report upstream_fix, precondition_live and materiality.")
-    if upstream and upstream.get("status") != UPSTREAM_OK:
-        reasons.append(
-            f"Upstream fix status is '{upstream.get('status')}': the root cause is already fixed or documented."
-        )
-    if live and live.get("status") != PRECONDITION_OK:
-        reasons.append(f"Precondition status is '{live.get('status')}', not present on the live chain now.")
+
+    upstream = raw_upstream if isinstance(raw_upstream, dict) else {}
+    live = raw_live if isinstance(raw_live, dict) else {}
+    materiality = raw_materiality if isinstance(raw_materiality, dict) else {}
+
+    # C1 + C2: upstream_fix schema, then business rule
+    if upstream:
+        status = upstream.get("status")
+        if status not in UPSTREAM_STATUSES:
+            reasons.append(
+                f"Upstream fix status is '{status}', not one of none_found, fixed_upstream, documented_known."
+            )
+        elif status != UPSTREAM_OK:
+            reasons.append(f"Upstream fix status is '{status}': the root cause is already fixed or documented.")
+        if not isinstance(upstream.get("evidence"), str) or not upstream.get("evidence").strip():
+            reasons.append("D5 upstream_fix.evidence is not a string.")
+
+    # C1 + C3: precondition_live schema, then business rule
+    if live:
+        status = live.get("status")
+        if status not in PRECONDITION_STATUSES:
+            reasons.append(f"Precondition status is '{status}', not one of present_now, absent_now, unknown.")
+        elif status != PRECONDITION_OK:
+            reasons.append(f"Precondition status is '{status}', not present on the live chain now.")
+        if not isinstance(live.get("evidence"), str) or not live.get("evidence").strip():
+            reasons.append("D5 precondition_live.evidence is not a string.")
+
+    # C1: materiality schema
+    usd_affected = None
+    if materiality:
+        reasons.extend(_string_field_reasons(materiality, ("price_source", "basis"), "D5 materiality"))
+        if _finite_number(materiality.get("threshold_usd")) is None:
+            reasons.append("D5 materiality.threshold_usd is not a finite number.")
+        usd_affected = _finite_number(materiality.get("usd_affected"))
+        if usd_affected is None:
+            reasons.append("D5 materiality.usd_affected is not a finite number.")
+
+    # C4: materiality vs the scan's configured threshold
     if kind in HIGH_VALUE_KINDS:
-        try:
-            minimum = float(threshold)
-        except (TypeError, ValueError):
-            minimum = 0.0
-        if minimum <= 0:
+        minimum = _finite_number(threshold)
+        if minimum is None or minimum <= 0:
             reasons.append("Scan configuration has no materiality_min_usd, so materiality cannot be verified.")
-        else:
-            try:
-                affected = float(materiality.get("usd_affected"))
-            except (TypeError, ValueError):
-                affected = -1.0
-            if affected < minimum:
-                reasons.append(f"Materiality ${affected:,.2f} is below the scan threshold ${minimum:,.2f}.")
+        elif usd_affected is not None and usd_affected < minimum:
+            reasons.append(f"Materiality {_format_usd(usd_affected)} is below the scan threshold ${minimum:,.2f}.")
     return reasons
 
 
