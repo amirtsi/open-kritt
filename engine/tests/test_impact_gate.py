@@ -20,7 +20,7 @@ from open_kritt_engine.impact_gate import (
     provenance_reasons,
     synthesize_legacy_blocks,
 )
-from open_kritt_engine.readiness_policies import LEGACY_POLICY_VERSION, POLICY_VERSION
+from open_kritt_engine.readiness_policies import LEGACY_POLICY_VERSION, POLICY_VERSION, POLICY_VERSION_GATE_1
 
 ARTIFACT_DIR = "poc-artifacts/scan-1/finding-2/metadata-3"
 EVALUATED_AT = "2026-09-24T10:00:00+00:00"
@@ -34,10 +34,12 @@ CHECKS = (
     "dimension_coverage",
     "d5_match",
     "scope_and_novelty",
+    "economic_reality",
+    "reality_context",
 )
 
 
-def make_scan(kind="public_bounty", source="user", version=POLICY_VERSION):
+def make_scan(kind="public_bounty", source="user", version=POLICY_VERSION_GATE_1):
     configuration = {}
     if kind is not None:
         configuration["investigation_kind"] = kind
@@ -204,7 +206,7 @@ def test_investigation_settings_reads_explicit_keys_and_normalizes_legacy_scans(
     assert investigation_settings(make_scan("private_audit")) == {
         "investigation_kind": "private_audit",
         "investigation_kind_source": "user",
-        "readiness_policy_version": POLICY_VERSION,
+        "readiness_policy_version": POLICY_VERSION_GATE_1,
         "legacy": False,
     }
     assert investigation_settings({"configuration": {}}) == {
@@ -243,7 +245,7 @@ def test_terminal_impact_proven_is_ready_and_d5_eligible():
     assert tuple(readiness["checks"]) == CHECKS
     assert set(readiness["checks"].values()) == {"pass"}
     assert readiness["policy"] == "public_bounty"
-    assert readiness["policy_version"] == POLICY_VERSION
+    assert readiness["policy_version"] == POLICY_VERSION_GATE_1
     assert readiness["evaluated_at"] == EVALUATED_AT
     assert readiness["legacy"] is False
 
@@ -525,6 +527,9 @@ def test_evidence_block_normalizes_paths_and_statuses():
         "lifecycle_status": "impact_proven",
         "policy_version": POLICY_VERSION,
         "legacy": False,
+        "cheatcode_sites": [],
+        "poc_source_paths": [],
+        "uncaptured_poc_imports": [],
     }
     partial_manifest = make_evidence(manifest={"poc.py"})
     assert partial_manifest["unresolved_paths"] == ["attack.log", "balances.json"]
@@ -635,3 +640,19 @@ def test_lifecycle_block_shape():
         "policy_version": POLICY_VERSION,
         "legacy": False,
     }
+
+
+def test_evidence_block_carries_cheatcode_fields():
+    block = evidence_block(
+        make_d4(),
+        make_manifest(),
+        capture_complete=True,
+        artifact_dir=ARTIFACT_DIR,
+        policy_version=POLICY_VERSION,
+        legacy=False,
+        cheatcode_sites=[{"site": "test/A.t.sol:3", "kind": "deal"}],
+        poc_source_paths=["test/A.t.sol"],
+    )
+    assert block["cheatcode_sites"] == [{"site": "test/A.t.sol:3", "kind": "deal"}]
+    assert block["poc_source_paths"] == ["test/A.t.sol"]
+    assert make_evidence()["cheatcode_sites"] == []
