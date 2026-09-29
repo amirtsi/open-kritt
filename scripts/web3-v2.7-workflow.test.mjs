@@ -331,3 +331,33 @@ test('v2.7 D2 marks exploitable by attacker path, not by unverified deployment f
     assert.doesNotMatch(step.content, /or unverified deployed state IS a concrete candidate/);
   }
 });
+
+test('v2.7 D4 reports PoC economics for the economic reality gate', async () => {
+  const { 'd4-local-poc.post-script.json': d4 } = await loadPostScripts();
+  const f = d4.outputFormat;
+  assert.deepEqual(Object.keys(f.setup_mutations.items.fields).sort(), ['beneficiary_role', 'justification', 'kind', 'site']);
+  assert.deepEqual(f.setup_mutations.items.fields.beneficiary_role.enum, [
+    'attacker', 'victim_user', 'protocol_contract', 'privileged_role', 'third_party', 'time',
+  ]);
+  assert.deepEqual(Object.keys(f.attacker_pnl.fields).sort(), ['asset', 'attacker_in', 'attacker_out', 'net_positive']);
+  assert.equal(f.victim_loss.items.fields.preexisting_on_fork, 'boolean');
+  assert.deepEqual(Object.keys(f.privileged_calls.items.fields).sort(), ['function', 'role', 'site']);
+  for (const rule of [/every cheatcode/i, /preexisting_on_fork/, /protocol_contract/, /live deployment/i]) {
+    assert.match(d4.content, rule);
+  }
+});
+
+test('v2.7 D5 reports reality checks for the economic reality gate', async () => {
+  const { 'd5-report-readiness.post-script.json': d5 } = await loadPostScripts();
+  const f = d5.outputFormat;
+  assert.deepEqual(f.upstream_fix.fields.status.enum, ['none_found', 'fixed_upstream', 'documented_known']);
+  assert.deepEqual(f.precondition_live.fields.status.enum, ['present_now', 'absent_now', 'unknown']);
+  assert.equal(f.materiality.fields.usd_affected, 'number');
+  for (const rule of [/all branches/i, /usd_affected/, /preexisting_on_fork: true/]) assert.match(d5.content, rule);
+});
+
+test('v2.7 D3 asks the live-state and privileged-trigger questions', async () => {
+  const { 'd3-hostile-verification.post-script.json': d3 } = await loadPostScripts();
+  assert.match(d3.content, /present on the live chain now/i);
+  assert.match(d3.content, /privileged role/i);
+});
