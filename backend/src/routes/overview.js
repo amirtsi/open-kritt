@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { assembleScans } from '../lib/repo.js';
+import { scanResearchKey } from '../lib/researchScope.js';
+
+export { scanResearchKey };
 
 const router = Router();
 
@@ -17,13 +20,6 @@ export function summarizeCanonicalFindings(vulnerabilities) {
     if (exploitable === true || exploitable === 'true') exploitableCount += 1;
   }
   return { findingsCount, exploitableCount };
-}
-
-export function scanResearchKey(scan) {
-  const configuration = scan?.configuration && typeof scan.configuration === 'object' ? scan.configuration : {};
-  const identity = configuration.research_id || configuration.program || scan?.repoFull || scan?.id;
-  const kind = configuration.benchmark_mode === true ? 'benchmark' : 'research';
-  return `${identity}::${kind}`;
 }
 
 // GET /api/overview — KPIs + recent scans for the dashboard.

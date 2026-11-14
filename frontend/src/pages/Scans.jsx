@@ -8,6 +8,7 @@ import LinkifiedText from '../components/LinkifiedText.jsx';
 import ResourceNotice from '../components/ResourceNotice.jsx';
 import { duplicateScanPath } from '../lib/scanDuplication.js';
 import { isScanDeletable } from '../lib/scanPresentation.js';
+import { clearSelectedResearch, readSelectedResearch, scanListResearch } from '../lib/researchSelection.js';
 import { useModalDialog } from '../lib/useModalDialog.js';
 import {
   providerCapacityAutoscalePresentation,
@@ -32,12 +33,16 @@ export default function Scans() {
   const [params, setParams] = useSearchParams();
   const newDialogParam = params.get('new');
   const researchScanId = params.get('researchScan') || '';
+  const showAll = params.get('all') === '1';
+  const [storedResearch, setStoredResearch] = useState(() => readSelectedResearch());
+  const research = scanListResearch({ urlResearch: researchScanId, stored: storedResearch, showAll });
   const [dialogOpen, setDialogOpen] = useState(newDialogParam === '1');
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [busyScanId, setBusyScanId] = useState(null);
   const [expandedErrorIds, setExpandedErrorIds] = useState(() => new Set());
   const [actionError, setActionError] = useState(null);
+  const lastResearch = useRef(null);
   const closeDialog = () => {
     setDialogOpen(false);
     if (params.has('new')) setParams({}, { replace: true });
@@ -46,36 +51,17 @@ export default function Scans() {
     setDialogOpen(newDialogParam === '1');
   }, [newDialogParam]);
   usePageChrome([{ label: 'Scans', active: true }], { label: '+ New scan', to: '/scans?new=1' }, []);
-  const requestKey = `${researchScanId}:${filter}:${page}`;
+  const requestKey = `${research}:${filter}:${page}`;
   const { data, loading, error, reload } = useFetch(
-    async () => {
-      if (!researchScanId) {
-        return { ...(await api.scanPage({ status: filter, page, pageSize: SCANS_PAGE_SIZE })), requestKey };
-      }
-      const overview = await api.overview(researchScanId);
-      const activeStatuses = new Set(['prewarming_cache', 'running', 'post_processing']);
-      const researchScans = overview.recentScans || [];
-      const items = researchScans.filter((scan) => {
-        if (filter === 'all') return true;
-        if (filter === 'running') return activeStatuses.has(scan.status);
-        return scan.status === filter;
-      });
-      return {
-        requestKey,
-        items,
-        page: 1,
-        pageSize: Math.max(1, items.length),
-        totalItems: items.length,
-        totalPages: 1,
-        startIndex: items.length ? 1 : 0,
-        endIndex: items.length,
-        runningCount: researchScans.filter((scan) => activeStatuses.has(scan.status)).length,
-      };
-    },
+    async () => ({
+      ...(await api.scanPage({ status: filter, page, pageSize: SCANS_PAGE_SIZE, research })),
+      requestKey,
+    }),
     [requestKey],
     { pollMs: 1000 }
   );
   const pageData = data?.requestKey === requestKey ? data : null;
+  if (pageData?.research) lastResearch.current = pageData.research;
   const scans = pageData?.items || [];
   const scanPages = pageData
     ? {
@@ -93,6 +79,13 @@ export default function Scans() {
   useEffect(() => {
     if (pageData && page > pageData.totalPages) setPage(pageData.totalPages);
   }, [page, pageData]);
+  useEffect(() => {
+    // A remembered research whose scans were deleted falls back to the current one.
+    if (storedResearch && !researchScanId && pageData?.research?.requestedFound === false) {
+      clearSelectedResearch();
+      setStoredResearch('');
+    }
+  }, [pageData, researchScanId, storedResearch]);
   const resumeScan = async (event, scanId) => {
     event.stopPropagation();
     setBusyScanId(scanId);
@@ -145,11 +138,12 @@ export default function Scans() {
           <div style={{ fontSize: 27, fontWeight: 600, letterSpacing: '-0.02em' }}>Scans</div>
           <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 3 }}>
             {pageData
-              ? `${pageData.totalItems} scan${pageData.totalItems === 1 ? '' : 's'} · ${pageData.runningCount} running now${researchScanId ? ' · selected research only' : ''}`
+              ? `${pageData.totalItems} scan${pageData.totalItems === 1 ? '' : 's'} · ${pageData.runningCount} running now`
               : ' '}
           </div>
         </div>
       </div>
+      <ResearchScopeBar research={showAll ? lastResearch.current : pageData?.research || null} showAll={showAll} />
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>
         {FILTERS.map(([k, label]) => (
@@ -982,6 +976,52 @@ function Stat({ value, label, color = 'var(--text)' }) {
     <div>
       <div style={{ fontSize: 20, fontWeight: 600, color }}>{value}</div>
       <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{label}</div>
+    </div>
+  );
+}
+
+export function ResearchScopeBar({ research, showAll }) {
+  if (!research && !showAll) return null;
+  const linkStyle = { color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 };
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        margin: '-6px 0 16px',
+        padding: '9px 12px',
+        border: '1px solid var(--border)',
+        borderRadius: 9,
+        background: 'var(--surface)',
+        fontSize: 13,
+      }}
+    >
+      {showAll ? (
+        <>
+          <span style={{ color: 'var(--text-2)' }}>All scans, every research</span>
+          <Link to="/scans" style={linkStyle}>
+            Back to {research ? research.label : 'the selected research'}
+          </Link>
+        </>
+      ) : (
+        <>
+          <span>
+            <span className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase' }}>
+              Research
+            </span>{' '}
+            <strong>{research.label}</strong>
+            <span style={{ color: 'var(--text-2)' }}>
+              {' '}
+              · {research.scanCount} scan{research.scanCount === 1 ? '' : 's'}
+            </span>
+          </span>
+          <Link to="/scans?all=1" style={linkStyle}>
+            Show all scans
+          </Link>
+        </>
+      )}
     </div>
   );
 }
