@@ -6,7 +6,7 @@ import { prismaUniqueConflict } from '../src/app.js';
 import { DEFAULT_WORKFLOW_NAMES } from '../src/lib/defaultWorkflows.js';
 import { validateScanJobLimit, ValidationError } from '../src/lib/validation.js';
 import { agentSkillMutationState, countAgentSkillScanUsage } from '../src/routes/agentSkills.js';
-import { scanResearchKey, summarizeCanonicalFindings } from '../src/routes/overview.js';
+import { scanResearchKey, summarizeCanonicalFindings, sumVerifiedCounts } from '../src/routes/overview.js';
 import { countPostScriptScanUsage, postScriptMutationState } from '../src/routes/postScripts.js';
 import {
   ACTIVE_SCAN_STATUSES,
@@ -1078,4 +1078,12 @@ test('Prisma unique agent-skill slug failures become a field-level conflict', ()
     },
   });
   assert.equal(prismaUniqueConflict({ code: 'P2025' }), null);
+});
+
+test('overview verified counts add up across the scans of a research', () => {
+  const counts = new Map([
+    ['21', { kept: 2, impactProven: 1 }],
+    ['26', { kept: 1, impactProven: 0 }],
+  ]);
+  assert.deepEqual(sumVerifiedCounts(counts), { keptCount: 3, impactProvenCount: 1 });
 });

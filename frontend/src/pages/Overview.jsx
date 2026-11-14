@@ -12,6 +12,30 @@ import {
   writeSelectedResearch,
 } from '../lib/researchSelection.js';
 
+// Headline numbers for the selected research. Findings counts come from the
+// engine's verification stages, not from D2's own exploitable flag.
+export function overviewKpis(data) {
+  return [
+    {
+      label: 'Latest run',
+      value: data.focusScan ? `#${data.focusScan.id}` : '—',
+      sub: data.focusScan?.repoDisplay || data.focusScan?.repoFull || 'No scans yet',
+    },
+    {
+      label: 'Status',
+      value: data.focusScan?.status || '—',
+      sub: data.focusScan?.progressLabel || 'Current research only',
+    },
+    {
+      label: 'D3 kept',
+      value: data.keptCount ?? 0,
+      sub: 'confirmed or plausible, selected research',
+      color: 'var(--accent)',
+    },
+    { label: 'Impact proven', value: data.impactProvenCount ?? 0, sub: 'PoC with proven impact', color: 'var(--fail)' },
+  ];
+}
+
 const todayLabel = () => new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
 export default function Overview() {
@@ -120,18 +144,9 @@ export default function Overview() {
       {data && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 26 }}>
-            <Kpi
-              label="Latest run"
-              value={data.focusScan ? `#${data.focusScan.id}` : '—'}
-              sub={data.focusScan?.repoDisplay || data.focusScan?.repoFull || 'No scans yet'}
-            />
-            <Kpi
-              label="Status"
-              value={data.focusScan?.status || '—'}
-              sub={data.focusScan?.progressLabel || 'Current research only'}
-            />
-            <Kpi label="Findings" value={data.findingsCount} sub="selected research" color="var(--accent)" />
-            <Kpi label="Exploitable" value={data.exploitableCount} sub="selected research" color="var(--fail)" />
+            {overviewKpis(data).map((kpi) => (
+              <Kpi key={kpi.label} {...kpi} />
+            ))}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
