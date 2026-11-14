@@ -485,3 +485,42 @@ test('full-screen multi-select maps checked indexes back to resources', async ()
     [resources[0], resources[2]]
   );
 });
+
+test('interactive scan creation shows the launch checklist before confirming', async (t) => {
+  const rootDir = await temporaryProject(t);
+  const client = scanCreationClient();
+  const preflightCalls = [];
+  client.scanPreflight = async (payload) => {
+    preflightCalls.push(payload);
+    return {
+      checks: [
+        { id: 'discovery_model', level: 'ok', message: 'Discovery runs on codex/gpt-test.' },
+        { id: 'deployment_context', level: 'warn', message: 'No configuration.deployment_context.' },
+      ],
+    };
+  };
+  const io = testIo();
+
+  const scan = await createScanInteractively({ client, prompter: new ScanPrompter(), io, rootDir });
+
+  assert.equal(scan.id, '99');
+  assert.equal(preflightCalls.length, 1);
+  assert.equal(preflightCalls[0].workflowId, '1');
+  assert.match(io.output.text, /WARN: No configuration\.deployment_context\./);
+  assert.doesNotMatch(io.output.text, /Discovery runs on/);
+});
+
+test('interactive scan creation stops on a blocking launch check', async (t) => {
+  const rootDir = await temporaryProject(t);
+  const client = scanCreationClient();
+  client.scanPreflight = async () => ({
+    checks: [{ id: 'after_d3', level: 'block', message: 'Unknown after-D3 post-script 999.' }],
+  });
+  const io = testIo();
+
+  const scan = await createScanInteractively({ client, prompter: new ScanPrompter(), io, rootDir });
+
+  assert.equal(scan, null);
+  assert.deepEqual(client.calls, []);
+  assert.match(io.output.text, /BLOCK: Unknown after-D3 post-script 999\./);
+});

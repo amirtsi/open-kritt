@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import known_issues as known_issues_module
+from . import static_facts as static_facts_module
 from .account_activity import (
     API_ACCOUNT_KEYS,
     AccountInactiveError,
@@ -525,6 +526,7 @@ def _prepare_dependency_snapshot_workspace(
     repo_dir = Path(workspace.root_dir) / "workspace"
     repo_dir.mkdir(parents=True, exist_ok=True)
     _attach_known_issues(manifest, primary_cache_checkout, repo_dir, cache_dir)
+    _attach_static_facts(manifest, primary_cache_checkout, repo_dir)
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
     layout = workspace_layout(SCAN_RUNNER_WORKDIR, manifest)
     _write_workspace_files(str(repo_dir), manifest, layout, manifest_json)
@@ -644,6 +646,7 @@ def _prepare_dependency_workspace_tree(
     }
     manifest_started = time.perf_counter()
     _attach_known_issues(manifest, repo_dir, repo_dir, cache_dir)
+    _attach_static_facts(manifest, repo_dir, repo_dir)
     manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
     layout = workspace_layout(repo_dir, manifest)
     _write_workspace_files(repo_dir, manifest, layout, manifest_json)
@@ -1079,6 +1082,14 @@ def workspace_layout(repo_dir: str, manifest: dict[str, Any]) -> str:
             f"target's audit PDFs ({unreadable} unreadable). Search it for the root cause, function, and invariant "
             "before claiming novelty; treat unreadable sources as unverified."
         )
+    static_analysis = manifest.get("static_analysis") if isinstance(manifest, dict) else None
+    if static_analysis:
+        lines.append(
+            f"Deterministic access index: {static_analysis.get('path')} lists "
+            f"{static_analysis.get('entrypoints')} external/public state-changing functions with their modifiers and "
+            f"caller checks ({static_analysis.get('unguarded')} without a guard). Start from the unguarded surface and "
+            "verify every guard in code; Slither is available for deeper call-graph and data-flow checks."
+        )
     return "\n".join(lines)
 
 
@@ -1203,20 +1214,27 @@ def _checkout_scan_repo_to_cache(
     allow_fallback: bool = True,
 ) -> tuple[str, str]:
     cache_base = _checkout_cache_base(cache_dir, repo_full, commit_sha, kind=kind, scan_id=scan_id)
+    lock_path = Path(cache_dir) / ".locks" / f"{cache_base.name}.lock"
     try:
-        ready = _read_ready_cache_checkout(cache_base)
-        if ready is not None:
-            return ready
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # Concurrent jobs of one scan share this cache entry. Without the lock a
+        # job that sees no ready marker removes the entry while another job is
+        # still snapshotting into it.
+        with _shared_workspace_thread_lock(lock_path), open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            ready = _read_ready_cache_checkout(cache_base)
+            if ready is not None:
+                return ready
 
-        if cache_base.exists():
-            shutil.rmtree(cache_base)
+            if cache_base.exists():
+                shutil.rmtree(cache_base)
 
-        if kind == "local":
-            repo_dir, checked_out = snapshot_local_repo(repo_full, str(cache_base), os.getenv("LOCAL_REPOS_PATH"))
-        else:
-            repo_dir, checked_out = checkout_repo(repo_full, commit_sha, str(cache_base), github_token)
-        _write_ready_cache_checkout(cache_base, repo_dir, checked_out, kind=kind)
-        return repo_dir, checked_out
+            if kind == "local":
+                repo_dir, checked_out = snapshot_local_repo(repo_full, str(cache_base), os.getenv("LOCAL_REPOS_PATH"))
+            else:
+                repo_dir, checked_out = checkout_repo(repo_full, commit_sha, str(cache_base), github_token)
+            _write_ready_cache_checkout(cache_base, repo_dir, checked_out, kind=kind)
+            return repo_dir, checked_out
     except OSError as exc:
         if not allow_fallback or exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
             raise
@@ -1431,6 +1449,16 @@ def _attach_known_issues(manifest: dict[str, Any], source_root: Any, target_root
         return
     if entries:
         manifest["known_issues"] = entries
+
+
+def _attach_static_facts(manifest: dict[str, Any], source_root: Any, target_root: Any) -> None:
+    try:
+        facts = static_facts_module.build_static_facts(Path(source_root), Path(target_root))
+    except Exception:
+        LOGGER.warning("could not build static facts for %s", source_root, exc_info=True)
+        return
+    if facts:
+        manifest["static_analysis"] = facts
 
 
 def _write_workspace_files(repo_dir: str, manifest: dict[str, Any], layout: str, manifest_json: str):

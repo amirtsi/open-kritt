@@ -40,11 +40,37 @@ Three configuration keys are snapshotted into the scan:
 | --- | --- | --- |
 | `investigation_kind` | one of the kinds above | you, at creation |
 | `investigation_kind_source` | `user`, `legacy_default` | backend writes `user` for every new gated scan |
-| `readiness_policy_version` | `v2.7-impact-gate-1` | backend copies the workflow's gate identifier |
+| `readiness_policy_version` | `v2.7-impact-gate-2` for new scans | backend copies the workflow's gate identifier |
 
 Once the scan exists, these keys are immutable. A run-settings update may omit them or
 resubmit them unchanged; any addition, removal, or change is rejected. Non-gated workflows
 accept the keys but no gate runs.
+
+### Policy versions
+
+| Version | Used by | Rules |
+| --- | --- | --- |
+| `v2.7-impact-gate-2` | every gated scan created from now on | the nine checks below plus `economic_reality` and `reality_context` |
+| `v2.7-impact-gate-1` | gated scans created before gate 2 existed | the nine checks below only; kept frozen so older decisions never change |
+
+An older scan keeps the version it was created with. Its readiness panel still lists the
+two new check groups, always as passing, because gate 1 does not evaluate them.
+
+### Materiality threshold
+
+`materiality_min_usd` is a number in the scan configuration: the smallest US-dollar amount
+at risk that is worth reporting. It is **required** when `investigation_kind` is
+`public_bounty` or `audit_competition`; the preflight check blocks the scan without it, and
+the gate blocks readiness if it is missing, not a number, or not above zero. A good value is
+the program's minimum payout for the lowest severity you would submit (for example the
+program minimum for a Critical). The other kinds do not need it.
+
+```json
+{
+  "investigation_kind": "public_bounty",
+  "materiality_min_usd": 15000
+}
+```
 
 ## Source-type matrix
 
@@ -95,9 +121,11 @@ bounty-relevant impact was not established; it keeps the accurate status above.
   `falsification_plan`.
 - **D4** runs the local PoC and reports `bug_status` and `impact_status` separately, fills
   the `impact_chain` with the same hop ids as the plan (it may add hops, never remove or
-  rename one), and lists `impact_artifact_paths` and `missing_impact_links`. The engine
-  captures the union of all artifact paths (at most 20 files after deduplication; an
-  overflow marks capture incomplete instead of truncating) and writes `_engine_evidence`.
+  rename one), and lists `impact_artifact_paths` and `missing_impact_links`. Under gate 2 it
+  also reports the PoC's economics (see [D4 and D5 reality fields](#d4-and-d5-reality-fields)).
+  The engine captures the union of all artifact paths (at most 20 files after
+  deduplication; an overflow marks capture incomplete instead of truncating), scans the
+  captured PoC test sources for cheatcodes, and writes `_engine_evidence`.
 - **D5** runs when `bug_status` is `reproduced`, capture is complete, and `impact_status` is
   `proven`, `partial`, or `not_proven`. It builds the `impact_mapping` of required versus
   observed outcomes and claims `submission_ready`. The engine then evaluates the rules
@@ -111,8 +139,10 @@ bounty-relevant impact was not established; it keeps the accurate status above.
 
 ## Readiness rules
 
-The engine evaluates nine named checks. `ready` is true only when every one passes; each
-failure adds a blocking reason.
+The engine evaluates nine named checks under every policy version, and two more check
+groups under `v2.7-impact-gate-2` (see [economic reality](#economic-reality-gate-2) and
+[reality context](#reality-context-gate-2)). `ready` is true only when every check passes;
+each failure adds a blocking reason.
 
 1. **`policy_version_supported`** - `readiness_policy_version` is known to the engine.
    Unknown versions block; nothing falls through to the latest policy.
@@ -129,8 +159,8 @@ failure adds a blocking reason.
    ids and no duplicates; every hop is `proven` or `not_applicable` (with an assessment);
    `missing_impact_links` is empty; no assumption is both `material` and `open`.
 6. **`provenance`** - every `proven` hop has at least one `evidence_paths` entry; every
-   path in the hops and in the D5 `impact_mapping` resolves to a captured artifact; capture
-   is complete.
+   path in the hops and in the D5 `impact_mapping` (and, under gate 2, in the D4
+   `victim_loss` entries) resolves to a captured artifact; capture is complete.
 7. **`dimension_coverage`** - every evidence dimension marked `required` is covered by at
    least one `proven` hop's `covers`; `not_applicable` dimensions carry a rationale; tags
    outside the family table are rejected, so a weaker substitute tag cannot satisfy the
@@ -141,6 +171,65 @@ failure adds a blocking reason.
 9. **`scope_and_novelty`** - `scope_status` is `in_scope_verified` with non-empty
    `scope_evidence` when the kind requires scope; `novelty_status` is `novel_verified` with
    non-empty `novelty_evidence` when the kind requires novelty.
+
+### Economic reality (gate 2)
+
+The **`economic_reality`** group asks whether the PoC shows a real attacker profiting from
+funds that really exist, rather than money or state the test put there itself.
+
+- **E1** - D4 reported `setup_mutations`, `attacker_pnl`, `victim_loss`, and
+  `privileged_calls`, each in the expected shape.
+- **E2** - every cheatcode call the engine finds in the captured PoC test source is declared
+  in `setup_mutations`. The engine scans Foundry `.t.sol` and Hardhat JS/TS tests, follows
+  their relative imports, and also blocks when no such test was captured or when the test
+  imports a local helper or base file that was not captured, because hidden setup could live
+  there.
+- **E3** - no setup step placed funds or state into a protocol contract
+  (`beneficiary_role: protocol_contract`); the exploited balance must already be there.
+- **E4** - for `funds_loss`, the attacker ends with a real net profit, counting everything it
+  paid in, including forced transfers of its own money.
+- **E5** - for `funds_loss`, `permanent_freezing`, and `temporary_freezing`, at least one
+  loss is of funds that already existed on the fork before the PoC changed anything.
+- **E6** - for `public_bounty` and `audit_competition`, the attack needs no privileged actor
+  (no `privileged_calls`, no setup step acting as an owner or admin).
+
+### Reality context (gate 2)
+
+The **`reality_context`** group asks whether the finding is still worth reporting on the
+real chain today.
+
+- **C1** - D5 reported `upstream_fix`, `precondition_live`, and `materiality`, each in the
+  expected shape.
+- **C2** - no upstream fix or documented known issue covers the same root cause
+  (`upstream_fix.status` is `none_found`).
+- **C3** - the balance or state the attack needs is present on the live chain now
+  (`precondition_live.status` is `present_now`).
+- **C4** - for `public_bounty` and `audit_competition`, the dollar amount at risk reaches
+  the scan's `materiality_min_usd`.
+
+C3 and E5 also block real bugs whose precondition only appears in the future (a reward
+program that is not running yet, an empty reserve). Those findings stay visible as
+`impact_proven` with their blocking reasons for manual judgement; they are never marked
+ready.
+
+### D4 and D5 reality fields
+
+D4 reports what the PoC did:
+
+| Field | Meaning |
+| --- | --- |
+| `setup_mutations` | every cheatcode or state-injection call (`deal`, `vm.store`, `vm.prank`, `selfdestruct` funding, `vm.warp`, Hardhat/Anvil RPC helpers, ...) with its `site` (`path:line`, same path as in `poc_artifact_paths`), `kind`, who it benefits (`beneficiary_role`), and why it is needed |
+| `attacker_pnl` | the asset, what the attacker put in and took out, and `net_positive` |
+| `victim_loss` | who lost what, whether those funds were already at that location on the fork before any setup step (`preexisting_on_fork`), and the artifacts that show it |
+| `privileged_calls` | every call in the attack path that needs an owner, admin, keeper, or other privileged role |
+
+D5 reports what it checked outside the PoC:
+
+| Field | Meaning |
+| --- | --- |
+| `upstream_fix` | whether the target's public repository (all branches), team notes, or known-issues list already fixes or documents the root cause, with what was searched |
+| `precondition_live` | whether the exploited balance or state exists on the live chain now, with the address, call, block, and value read |
+| `materiality` | the dollar value of the preexisting losses, the price source, what was priced, and `threshold_usd` (the scan's `materiality_min_usd`, or 0 when none is set) |
 
 ## Impact families and evidence dimensions
 

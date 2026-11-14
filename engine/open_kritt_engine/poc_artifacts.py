@@ -2,17 +2,21 @@
 
 import hashlib
 import json
+import posixpath
 import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 from .impact_gate import declared_evidence_paths, normalize_evidence_path
+from .poc_cheatcodes import cheatcode_sites, is_poc_source, relative_imports
 
 MAX_FILES = 20
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_TOTAL_BYTES = 8 * 1024 * 1024
 _NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,120}")
+_SOURCE_SUFFIXES = (".sol", ".js", ".ts", ".mjs", ".cjs")
+_JS_RESOLVE_SUFFIXES = ("", ".js", ".ts", ".mjs", ".cjs", "/index.js", "/index.ts")
 
 
 class PocArtifactError(ValueError):
@@ -26,6 +30,9 @@ def _capture_result(
     unresolved: list[str] | None = None,
     capture_complete: bool,
     reason: str = "",
+    cheatcode_sites: list | None = None,
+    poc_source_paths: list | None = None,
+    uncaptured_poc_imports: list | None = None,
 ) -> dict[str, Any]:
     return {
         "artifact_dir": artifact_dir,
@@ -33,6 +40,9 @@ def _capture_result(
         "unresolved_paths": list(unresolved or []),
         "capture_complete": capture_complete,
         "reason": reason,
+        "cheatcode_sites": list(cheatcode_sites or []),
+        "poc_source_paths": list(poc_source_paths or []),
+        "uncaptured_poc_imports": list(uncaptured_poc_imports or []),
     }
 
 
@@ -59,6 +69,80 @@ def _resolve_source(source_root: Path, normalized: str) -> Path:
     return resolved
 
 
+_PATH_ERRORS = (OSError, RuntimeError, ValueError)  # I/O, symlink loops (RuntimeError), NUL bytes (ValueError)
+_OUTSIDE = "<outside workspace>: "
+
+
+def _workspace_file(source_root: Path, normalized: str) -> str:
+    """'file' for a regular file inside the workspace, 'outside' when it resolves outside, '' otherwise."""
+    try:
+        resolved = (source_root / normalized).resolve(strict=True)
+        if not resolved.is_relative_to(source_root):
+            return "outside"
+        return "file" if resolved.is_file() else ""
+    except _PATH_ERRORS:
+        return ""
+
+
+def _resolve_import(source_root: Path, importer: str, specifier: str) -> tuple[str | None, bool]:
+    """(workspace-relative path, escapes) for a relative import; (None, False) when it does not exist."""
+    joined = posixpath.normpath(posixpath.join(posixpath.dirname(importer), specifier))
+    if joined.startswith("../") or joined == ".." or posixpath.isabs(joined):
+        return None, True
+    if joined == ".":
+        return None, False
+    suffixes = ("",) if importer.lower().endswith(".sol") else _JS_RESOLVE_SUFFIXES
+    for suffix in suffixes:
+        candidate = normalize_evidence_path(joined + suffix)
+        if not candidate:
+            continue
+        state = _workspace_file(source_root, candidate)
+        if state == "outside":
+            return None, True
+        if state == "file":
+            return candidate, False
+    return None, False
+
+
+def _is_poc_import(importer: str, imported: str) -> bool:
+    """A PoC helper: a test/PoC source itself, or a source file in the importer's own (non-root) directory tree."""
+    if is_poc_source(imported):
+        return True
+    tree = posixpath.dirname(importer)
+    return bool(tree) and imported.lower().endswith(_SOURCE_SUFFIXES) and imported.startswith(tree + "/")
+
+
+def _collect_poc_sources(
+    source_root: Path, temp_dir: Path, manifest: list[dict[str, Any]]
+) -> tuple[dict[str, str], list[str]]:
+    """Read captured PoC sources, follow their relative imports, and name imported PoC helpers not captured."""
+    captured_files = {row["source"]: row["file"] for row in manifest}
+    poc_files: dict[str, str] = {}
+    uncaptured: set[str] = set()
+    queue = [source for source in captured_files if is_poc_source(source)]
+    while queue:
+        source = queue.pop(0)
+        if source in poc_files:
+            continue
+        try:
+            poc_files[source] = (temp_dir / captured_files[source]).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for specifier in relative_imports(source, poc_files[source]):
+            imported, escapes = _resolve_import(source_root, source, specifier)
+            if escapes:
+                # Fail closed: code the engine cannot capture may hold setup mutations.
+                uncaptured.add(f"{_OUTSIDE}{specifier} (imported by {source})")
+                continue
+            if imported is None or not _is_poc_import(source, imported):
+                continue
+            if imported in captured_files:
+                queue.append(imported)
+            else:
+                uncaptured.add(imported)
+    return poc_files, sorted(uncaptured)
+
+
 def capture_evidence(
     data_dir: str,
     repo_dir: str,
@@ -80,7 +164,7 @@ def capture_evidence(
         )
     try:
         source_root = Path(repo_dir).resolve(strict=True)
-    except OSError as exc:
+    except _PATH_ERRORS as exc:
         return _capture_result(unresolved=declared, capture_complete=False, reason=f"workspace unavailable: {exc}")
     relative_dir = Path("poc-artifacts") / f"scan-{scan_id}" / f"finding-{finding_id}" / f"metadata-{metadata_id}"
     destination = Path(data_dir) / relative_dir
@@ -108,7 +192,7 @@ def capture_evidence(
                 target = temp_dir / name
                 shutil.copyfile(resolved, target)
                 target.chmod(0o600)
-            except (OSError, PocArtifactError) as exc:
+            except (*_PATH_ERRORS, PocArtifactError) as exc:
                 unresolved.append(raw)
                 reasons.append(f"{raw}: {exc}")
                 continue
@@ -122,11 +206,12 @@ def capture_evidence(
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 }
             )
+        poc_files, uncaptured_imports = _collect_poc_sources(source_root, temp_dir, manifest)
         (temp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         if destination.exists():
             shutil.rmtree(destination)
         temp_dir.rename(destination)
-    except OSError as exc:
+    except Exception as exc:  # capture must never raise into the D4 run; always drop the temp dir
         shutil.rmtree(temp_dir, ignore_errors=True)
         return _capture_result(unresolved=declared, capture_complete=False, reason=f"artifact capture failed: {exc}")
     return _capture_result(
@@ -135,4 +220,7 @@ def capture_evidence(
         unresolved=unresolved,
         capture_complete=not unresolved,
         reason="; ".join(reasons),
+        cheatcode_sites=cheatcode_sites(poc_files, helpers=set(poc_files)),
+        poc_source_paths=sorted(poc_files),
+        uncaptured_poc_imports=uncaptured_imports,
     )

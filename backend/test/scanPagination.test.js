@@ -5,6 +5,7 @@ import {
   DEFAULT_SCAN_PAGE_SIZE,
   findingExportSourceProfile,
   researchScanPage,
+  scanLiveHandler,
   MAX_SCAN_PAGE_SIZE,
   SCAN_LIST_ORDER,
   scanListPagination,
@@ -114,8 +115,6 @@ test('bounded finding reads cap related post-processing records', async () => {
   );
   assert.equal(enrichmentQuery.take, 3);
 });
-
-import { scanLiveHandler } from '../src/routes/scans.js';
 
 function fakeResponse() {
   return {

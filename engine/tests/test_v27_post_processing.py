@@ -201,6 +201,7 @@ def test_d4_result_keeps_model_fields_and_adds_engine_evidence():
         "unresolved_paths": ["attack.log"],
         "capture_complete": False,
         "reason": "attack.log: artifact is missing or not a regular file",
+        "uncaptured_poc_imports": ["test/Base.t.sol"],
     }
     seen, stored = run_stage(db, marked([dict(model_row)]), capture=capture)
     assert seen["kind"] == "v27_poc"
@@ -219,6 +220,9 @@ def test_d4_result_keeps_model_fields_and_adds_engine_evidence():
         "lifecycle_status": "impact_blocked",
         "policy_version": POLICY_VERSION,
         "legacy": False,
+        "cheatcode_sites": [],
+        "poc_source_paths": [],
+        "uncaptured_poc_imports": ["test/Base.t.sol"],
     }
     assert "_engine_lifecycle" not in stored
 

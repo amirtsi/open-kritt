@@ -6,6 +6,7 @@ from open_kritt_engine.readiness_policies import (
     LEGACY_POLICY_VERSION,
     OBJECTIVE_SOURCES,
     POLICY_VERSION,
+    POLICY_VERSION_GATE_1,
     InvestigationPolicy,
     UnsupportedPolicyVersion,
     family_dimensions,
@@ -59,7 +60,8 @@ FAMILY_ROWS = {
 
 
 def test_constants_match_the_spec():
-    assert POLICY_VERSION == "v2.7-impact-gate-1"
+    assert POLICY_VERSION == "v2.7-impact-gate-2"
+    assert POLICY_VERSION_GATE_1 == "v2.7-impact-gate-1"
     assert LEGACY_POLICY_VERSION == "legacy-unverified"
     assert INVESTIGATION_KINDS == tuple(KIND_ROWS)
     assert OBJECTIVE_SOURCES == (
