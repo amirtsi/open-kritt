@@ -49,12 +49,24 @@ imported this way; use the guided device flow instead.
 For ChatGPT sign-ins, **Accounts → Codex** shows the weekly reset time when Codex reports a
 weekly usage window. If that window has not started, choose **Start quota** to make a small
 Codex request through the selected account and refresh its usage. The refresh can take a
-short while.
+short while. If the action times out after two minutes, refresh the account status before
+retrying; the upstream request may already have started the usage window.
 
 When Codex reports manual reset credits, Accounts shows how many are available. Choose
 **Use reset** to consume one for an eligible usage window. open·kritt asks for confirmation
 because this action cannot be undone. These controls apply to ChatGPT sign-ins, not OpenAI
 Platform API keys.
+
+## Daybreak access status
+
+**Accounts → Codex** also checks each saved ChatGPT login's Daybreak access status. It
+shows active access, required security setup or security-key sign-in, inactive or
+unavailable access, and cases where the status could not be verified. Use **Refresh
+accounts** after completing a sign-in or setup step. A working Codex login alone does
+not establish Daybreak access, and this status does not identify which physical key
+was used.
+
+![Accounts page showing a synthetic example of active Daybreak access](/images/daybreak-access-example.png)
 
 ## Linux ownership and permissions
 
