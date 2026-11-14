@@ -27,6 +27,8 @@ import { CLAUDE_CREDENTIAL_FILENAMES, promoteClaudeCredential, withClaudeCredent
 const LOGIN_PROVIDERS = new Set(['codex', 'claude', 'xai']);
 const PROVIDER_LABELS = { codex: 'Codex', claude: 'Claude', xai: 'xAI' };
 const SESSION_TIMEOUT_MS = 20 * 60 * 1000;
+const WEEKLY_USAGE_TIMEOUT_MS = 2 * 60 * 1000;
+const WEEKLY_USAGE_TERMINATION_GRACE_MS = 1000;
 const MAX_CAPTURED_OUTPUT = 32 * 1024;
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOGIN_ENV_KEYS = [
@@ -106,7 +108,9 @@ async function updateCodexRuntimeHome(
   let nextHomes = [];
   const state = await mutateEnvironmentFile(
     (values) => {
-      const homes = splitConfiguredHomes(values.ENGINE_CODEX_HOME || initialHomes.join(','));
+      const homes = splitConfiguredHomes(
+        Object.hasOwn(values, 'ENGINE_CODEX_HOME') ? values.ENGINE_CODEX_HOME : initialHomes.join(',')
+      );
       const updatedHomes = present
         ? homes.includes(home)
           ? homes
@@ -227,7 +231,9 @@ async function updateGrokRuntimeHome(
   let nextHomes = [];
   const state = await mutateEnvironmentFile(
     (values) => {
-      const homes = splitConfiguredHomes(values.ENGINE_GROK_HOME || initialHomes.join(','));
+      const homes = splitConfiguredHomes(
+        Object.hasOwn(values, 'ENGINE_GROK_HOME') ? values.ENGINE_GROK_HOME : initialHomes.join(',')
+      );
       const updatedHomes = present
         ? homes.includes(home)
           ? homes
@@ -458,9 +464,23 @@ export class AccountLoginManager {
     this.environmentFilePath = environmentFilePath;
     this.timeoutMs = timeoutMs;
     this.sessions = new Map();
+    this.startingProviders = new Map();
   }
 
   async start(provider, accountId = null) {
+    const existing = this.startingProviders.get(provider);
+    if (existing) return existing;
+
+    const pending = this.startSession(provider, accountId);
+    this.startingProviders.set(provider, pending);
+    try {
+      return await pending;
+    } finally {
+      this.startingProviders.delete(provider);
+    }
+  }
+
+  async startSession(provider, accountId) {
     if (!LOGIN_PROVIDERS.has(provider)) throw loginError('Choose Codex, Claude, or xAI login.');
     const activeForProvider = [...this.sessions.values()].find(
       (session) => session.provider === provider && ['starting', 'waiting'].includes(session.status)
@@ -504,80 +524,77 @@ export class AccountLoginManager {
     };
     this.sessions.set(id, session);
 
-    let command;
-    let args;
-    let env = { ...process.env, NO_COLOR: '1', TERM: 'dumb' };
-    delete env.DEEPSEEK_API_KEY;
-    if (provider === 'codex') {
-      if (reloginTarget) {
-        session.codexHome = reloginTarget.home;
-        session.codexRuntimeHome = reloginTarget.runtimeHome;
-        session.replacesAccountId = accountId;
-      } else {
-        const folder = `account-${createdAt.toISOString().replace(/\D/g, '').slice(0, 14)}-${id.slice(0, 8)}`;
-        session.codexDirectory = join(this.codexAccountsRoot, folder);
-        session.codexHome = join(session.codexDirectory, '.codex');
-        session.codexRuntimeHome = join(this.codexRuntimeAccountsRoot, folder, '.codex');
-        await mkdir(session.codexHome, { recursive: true, mode: 0o700 });
-      }
-      command = 'codex';
-      args = ['login', '--device-auth'];
-      env.CODEX_HOME = session.codexHome;
-    } else if (provider === 'claude') {
-      if (reloginTarget) {
-        session.claudeHome = reloginTarget.home;
-        session.claudeRuntimeHome = reloginTarget.runtimeHome;
-        session.replacesAccountId = accountId;
-      } else {
-        const folder = `account-${createdAt.toISOString().replace(/\D/g, '').slice(0, 14)}-${id.slice(0, 8)}`;
-        session.claudeDirectory = join(this.claudeAccountsRoot, folder);
-        session.claudeHome = join(session.claudeDirectory, '.claude');
-        session.claudeRuntimeHome = join(this.claudeRuntimeAccountsRoot, folder, '.claude');
-        await mkdir(session.claudeHome, { recursive: true, mode: 0o700 });
-      }
-      session.claudeLoginHome = join(dirname(this.claudeHome), `.claude-login-${id}`);
-      await mkdir(session.claudeLoginHome, { recursive: true, mode: 0o700 });
-      command = 'claude';
-      args = ['auth', 'login', '--claudeai'];
-      env.HOME = session.claudeLoginHome;
-      env.CLAUDE_HOME = session.claudeLoginHome;
-      env.CLAUDE_CONFIG_DIR = session.claudeLoginHome;
-    } else {
-      // Grok is a separately distributed binary. Give device login only the
-      // process settings it needs, never backend/database or provider secrets.
-      env = scopedLoginEnvironment();
-      if (reloginTarget) {
-        session.grokHome = reloginTarget.home;
-        session.grokRuntimeHome = reloginTarget.runtimeHome;
-        session.replacesAccountId = accountId;
-      } else {
-        const folder = `account-${createdAt.toISOString().replace(/\D/g, '').slice(0, 14)}-${id.slice(0, 8)}`;
-        session.grokDirectory = join(this.grokAccountsRoot, folder);
-        session.grokHome = join(session.grokDirectory, '.grok');
-        session.grokRuntimeHome = join(this.grokRuntimeAccountsRoot, folder, '.grok');
-        await mkdir(session.grokHome, { recursive: true, mode: 0o700 });
-      }
-      command = 'grok';
-      args = ['login', '--device-auth'];
-      env.GROK_HOME = session.grokHome;
-      env.HOME = session.grokDirectory || dirname(session.grokHome);
-    }
-    delete env.CI;
-
     let child;
     try {
+      let command;
+      let args;
+      let env = { ...process.env, NO_COLOR: '1', TERM: 'dumb' };
+      delete env.DEEPSEEK_API_KEY;
+      if (provider === 'codex') {
+        if (reloginTarget) {
+          session.codexHome = reloginTarget.home;
+          session.codexRuntimeHome = reloginTarget.runtimeHome;
+          session.replacesAccountId = accountId;
+        } else {
+          const folder = `account-${createdAt.toISOString().replace(/\D/g, '').slice(0, 14)}-${id.slice(0, 8)}`;
+          session.codexDirectory = join(this.codexAccountsRoot, folder);
+          session.codexHome = join(session.codexDirectory, '.codex');
+          session.codexRuntimeHome = join(this.codexRuntimeAccountsRoot, folder, '.codex');
+          await mkdir(session.codexHome, { recursive: true, mode: 0o700 });
+        }
+        command = 'codex';
+        args = ['login', '--device-auth'];
+        env.CODEX_HOME = session.codexHome;
+      } else if (provider === 'claude') {
+        if (reloginTarget) {
+          session.claudeHome = reloginTarget.home;
+          session.claudeRuntimeHome = reloginTarget.runtimeHome;
+          session.replacesAccountId = accountId;
+        } else {
+          const folder = `account-${createdAt.toISOString().replace(/\D/g, '').slice(0, 14)}-${id.slice(0, 8)}`;
+          session.claudeDirectory = join(this.claudeAccountsRoot, folder);
+          session.claudeHome = join(session.claudeDirectory, '.claude');
+          session.claudeRuntimeHome = join(this.claudeRuntimeAccountsRoot, folder, '.claude');
+          await mkdir(session.claudeHome, { recursive: true, mode: 0o700 });
+        }
+        session.claudeLoginHome = join(dirname(this.claudeHome), `.claude-login-${id}`);
+        await mkdir(session.claudeLoginHome, { recursive: true, mode: 0o700 });
+        command = 'claude';
+        args = ['auth', 'login', '--claudeai'];
+        env.HOME = session.claudeLoginHome;
+        env.CLAUDE_HOME = session.claudeLoginHome;
+        env.CLAUDE_CONFIG_DIR = session.claudeLoginHome;
+      } else {
+        // Grok is a separately distributed binary. Give device login only the
+        // process settings it needs, never backend/database or provider secrets.
+        env = scopedLoginEnvironment();
+        if (reloginTarget) {
+          session.grokHome = reloginTarget.home;
+          session.grokRuntimeHome = reloginTarget.runtimeHome;
+          session.replacesAccountId = accountId;
+        } else {
+          const folder = `account-${createdAt.toISOString().replace(/\D/g, '').slice(0, 14)}-${id.slice(0, 8)}`;
+          session.grokDirectory = join(this.grokAccountsRoot, folder);
+          session.grokHome = join(session.grokDirectory, '.grok');
+          session.grokRuntimeHome = join(this.grokRuntimeAccountsRoot, folder, '.grok');
+          await mkdir(session.grokHome, { recursive: true, mode: 0o700 });
+        }
+        command = 'grok';
+        args = ['login', '--device-auth'];
+        env.GROK_HOME = session.grokHome;
+        env.HOME = session.grokDirectory || dirname(session.grokHome);
+      }
+      delete env.CI;
+
       child = this.spawnProcess(command, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (error) {
-      session.status = 'failed';
-      session.message = `Could not start ${provider} login: ${error.message}`;
-      if (session.claudeDirectory) void rm(session.claudeDirectory, { recursive: true, force: true });
-      if (session.claudeLoginHome) void rm(session.claudeLoginHome, { recursive: true, force: true });
-      if (session.grokDirectory) void rm(session.grokDirectory, { recursive: true, force: true });
+      await this.fail(session, `Could not start ${provider} login: ${error.message}`);
       throw loginError(session.message, 503);
     }
     session.child = child;
 
     const capture = (chunk) => {
+      if (session.settled || session.terminal || session.saving) return;
       session.output = `${session.output}${String(chunk)}`.slice(-MAX_CAPTURED_OUTPUT);
       const instructions = parseLoginInstructions(provider, session.output);
       if (instructions.authorizationUrl || instructions.requiresInput) session.status = 'waiting';
@@ -588,7 +605,8 @@ export class AccountLoginManager {
     child.once('error', (error) => this.fail(session, `Could not run ${provider} login: ${error.message}`));
     child.once('close', (code) => this.finish(session, code));
     session.timeout = setTimeout(() => {
-      if (session.settled) return;
+      if (session.settled || session.terminal || session.saving) return;
+      session.terminal = true;
       session.status = 'failed';
       session.message = 'Login expired. Start a new login and try again.';
       session.child?.kill('SIGTERM');
@@ -621,7 +639,12 @@ export class AccountLoginManager {
   cancel(id) {
     const session = this.sessions.get(id);
     if (!session) throw loginError('Login session not found.', 404);
-    if (!session.settled) {
+    if (session.saving && !session.settled) {
+      throw loginError('This login is already being saved. Wait for it to finish.', 409);
+    }
+    if (!session.settled && !session.terminal) {
+      session.terminal = true;
+      clearTimeout(session.timeout);
       session.status = 'canceled';
       session.message = 'Login canceled.';
       session.child?.kill('SIGTERM');
@@ -680,6 +703,19 @@ export class AccountLoginManager {
     try {
       await new Promise((resolvePromise, rejectPromise) => {
         let child;
+        let timeout;
+        let escalation;
+        let settled = false;
+        let timedOut = false;
+        const timeoutError = () => loginError('Codex weekly usage timed out.', 504);
+        const finish = (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          clearTimeout(escalation);
+          if (error) rejectPromise(error);
+          else resolvePromise();
+        };
         try {
           child = this.spawnProcess(
             'codex',
@@ -702,13 +738,32 @@ export class AccountLoginManager {
             { cwd: '/tmp', env, stdio: 'ignore' }
           );
         } catch {
-          rejectPromise(loginError('Could not start Codex weekly usage.', 503));
+          finish(loginError('Could not start Codex weekly usage.', 503));
           return;
         }
-        child.once('error', () => rejectPromise(loginError('Could not start Codex weekly usage.', 503)));
+        child.on('error', () => {
+          if (!timedOut) finish(loginError('Could not start Codex weekly usage.', 503));
+          // A post-timeout error does not prove the child has closed; keep escalation armed.
+        });
         child.once('close', (code) =>
-          code === 0 ? resolvePromise() : rejectPromise(loginError('Codex could not start weekly usage.', 502))
+          finish(timedOut ? timeoutError() : code === 0 ? null : loginError('Codex could not start weekly usage.', 502))
         );
+        timeout = setTimeout(() => {
+          timedOut = true;
+          try {
+            child.kill?.('SIGTERM');
+          } catch {
+            // Escalation still bounds this request if graceful termination fails.
+          }
+          escalation = setTimeout(() => {
+            try {
+              child.kill?.('SIGKILL');
+            } catch {
+              // The request must still settle if signaling is unavailable.
+            }
+            finish(timeoutError());
+          }, WEEKLY_USAGE_TERMINATION_GRACE_MS);
+        }, WEEKLY_USAGE_TIMEOUT_MS);
       });
     } finally {
       await Promise.allSettled([chown(authPath, original.uid, original.gid), chmod(authPath, original.mode & 0o7777)]);
@@ -823,21 +878,27 @@ export class AccountLoginManager {
   }
 
   fail(session, message) {
-    if (session.settled) return;
+    if (session.settled || session.terminal) return;
     session.settled = true;
     clearTimeout(session.timeout);
     session.status = 'failed';
     session.message = message;
     session.child = null;
-    if (session.codexDirectory) void rm(session.codexDirectory, { recursive: true, force: true });
-    if (session.claudeDirectory) void rm(session.claudeDirectory, { recursive: true, force: true });
-    if (session.claudeLoginHome) void rm(session.claudeLoginHome, { recursive: true, force: true });
-    if (session.grokDirectory) void rm(session.grokDirectory, { recursive: true, force: true });
+    const directories = [
+      session.codexDirectory,
+      session.claudeDirectory,
+      session.claudeLoginHome,
+      session.grokDirectory,
+    ];
+    return Promise.all(
+      directories.filter(Boolean).map((directory) => rm(directory, { recursive: true, force: true }).catch(() => {}))
+    );
   }
 
   async finish(session, code) {
-    if (session.settled) return;
-    if (session.status === 'canceled') {
+    if (session.settled || session.finishing) return;
+    session.finishing = true;
+    if (session.terminal || session.status === 'canceled') {
       session.settled = true;
       clearTimeout(session.timeout);
       session.child = null;
@@ -864,9 +925,19 @@ export class AccountLoginManager {
       } else if (session.provider === 'xai') {
         usable = await usableJsonFile(join(session.grokHome, 'auth.json'));
       } else {
-        usable = await promoteClaudeCredential(session.claudeLoginHome, session.claudeHome || this.claudeHome);
+        const credentials = await Promise.all(
+          CLAUDE_CREDENTIAL_FILENAMES.map((name) => usableJsonFile(join(session.claudeLoginHome, name)))
+        );
+        usable = credentials.some(Boolean);
       }
+      if (session.terminal) return;
       if (!usable) throw new Error('The provider finished without saving usable login credentials.');
+      // Cancellation is accepted until persistence begins, never falsely after it.
+      session.saving = true;
+      clearTimeout(session.timeout);
+      if (session.provider === 'claude') {
+        await promoteClaudeCredential(session.claudeLoginHome, session.claudeHome || this.claudeHome);
+      }
       if (session.provider === 'codex') {
         if (!(await usableJsonFile(join(this.codexPrimaryHome, 'auth.json')))) {
           await removeCodexRuntimeHome(this.codexRuntimePrimaryHome, {
@@ -911,6 +982,12 @@ export class AccountLoginManager {
       if (session.claudeDirectory) await rm(session.claudeDirectory, { recursive: true, force: true });
       if (session.grokDirectory) await rm(session.grokDirectory, { recursive: true, force: true });
     } finally {
+      if (session.terminal) {
+        const directories = [session.codexDirectory, session.claudeDirectory, session.grokDirectory];
+        await Promise.all(
+          directories.filter(Boolean).map((directory) => rm(directory, { recursive: true, force: true }))
+        );
+      }
       if (session.claudeLoginHome) await rm(session.claudeLoginHome, { recursive: true, force: true });
       session.settled = true;
       clearTimeout(session.timeout);

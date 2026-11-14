@@ -142,6 +142,32 @@ def _int(value: Any) -> int:
     return int(value)
 
 
+def blocked_enrichment_result(stage: str, scan: dict[str, Any], reason: str) -> dict[str, Any]:
+    """Enrichment written when a post-script fails every retry on one finding.
+
+    It carries no gating evidence (no ``_engine_evidence`` / verdict), so later
+    stages skip the finding, and it records why for manual follow-up. Writing it
+    keeps the finding from being re-selected, so the scan can finish instead of
+    failing on a single blocked finding.
+    """
+    settings = investigation_settings(scan)
+    trimmed = reason.strip()
+    if len(trimmed) > 2000:
+        trimmed = trimmed[:1997] + "..."
+    return {
+        "_engine_blocked": {
+            "stage": stage,
+            "reason": trimmed,
+            "policy_version": settings["readiness_policy_version"],
+        },
+        "_reserved_report": (
+            f"This finding's {stage.upper()} post-script was blocked after exhausting its retries "
+            "and needs manual follow-up. It did not advance to later stages.\n\n"
+            f"Reason: {trimmed}"
+        ),
+    }
+
+
 def _json_text(value: Any, max_chars: int = 4000) -> str:
     if value is None:
         return ""
@@ -537,6 +563,11 @@ class PostProcessor:
         def validator(payload):
             return validate_payload(payload, schema, multi_output=False)
 
+        # A supplemental re-run of the D4 stage captures PoC artifacts like the pipeline D4,
+        # so the regenerated PoC test files persist under the finding's artifact directory.
+        stage = stage_for_script(contextual_scan, _int(run["post_script_id"]))
+        is_d4 = stage == "d4"
+
         started = now_utc()
         try:
             payload, usage, codex_session_id, checked_out_commit = self._run_harness_with_retries(
@@ -549,8 +580,10 @@ class PostProcessor:
                 prompt_template=prompt_template,
                 prompt_context=post_script_context(contextual_scan, vulnerability),
                 multi_output=False,
-                kind="supplemental_post_script",
+                kind="v27_poc" if is_d4 else "supplemental_post_script",
+                poc_finding_id=_int(vulnerability["id"]) if is_d4 else None,
             )
+            self._evidence_captures.pop(metadata_id, None)
             rows = validate_payload(payload, schema, multi_output=False)
             result = rows[0] if rows else {}
             run_time_ms = int((now_utc() - started).total_seconds() * 1000)
@@ -1292,17 +1325,60 @@ class PostProcessor:
                 )
                 conn.commit()
             return True
+        except PostProcessRateLimited as exc:
+            run_time_ms = int((now_utc() - started).total_seconds() * 1000)
+            with self.db.connect() as conn:
+                self.db.update_post_process_metadata(
+                    conn,
+                    metadata_id,
+                    status="interrupted",
+                    error=str(exc),
+                    run_time_ms=run_time_ms,
+                    raw_token_usage=None,
+                    phase="interrupted",
+                )
+                conn.commit()
+            raise
+        except PostProcessExecutionError as exc:
+            # A post-script that failed every retry on ONE finding must not discard a
+            # whole scan (for example a model safeguard refusing a single PoC). Record
+            # the finding as blocked so it is not re-selected, then let the pipeline
+            # finish; the finding is flagged for manual follow-up and can be re-run for
+            # that stage with a supplemental post-script run.
+            run_time_ms = int((now_utc() - started).total_seconds() * 1000)
+            with self.db.connect() as conn:
+                self.db.update_post_process_metadata(
+                    conn,
+                    metadata_id,
+                    status="failed",
+                    error=str(exc),
+                    run_time_ms=run_time_ms,
+                    raw_token_usage=None,
+                    phase="failed",
+                )
+                self.db.upsert_vulnerability_enrichment(
+                    conn,
+                    scan_id=scan_id,
+                    vulnerability_id=_int(row["id"]),
+                    post_script_id=_int(post_script["id"]),
+                    post_script_name=post_script["name"],
+                    result=blocked_enrichment_result(stage, current, str(exc)),
+                    stub=False,
+                    stub_explanation=None,
+                )
+                conn.commit()
+            return True
         except Exception as exc:
             run_time_ms = int((now_utc() - started).total_seconds() * 1000)
             with self.db.connect() as conn:
                 self.db.update_post_process_metadata(
                     conn,
                     metadata_id,
-                    status="interrupted" if isinstance(exc, PostProcessRateLimited) else "failed",
+                    status="failed",
                     error=str(exc),
                     run_time_ms=run_time_ms,
                     raw_token_usage=None,
-                    phase="interrupted" if isinstance(exc, PostProcessRateLimited) else "failed",
+                    phase="failed",
                 )
                 conn.commit()
             raise

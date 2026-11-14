@@ -142,9 +142,10 @@ export const api = {
   steps: () => request('/steps'),
   // scans
   scans: (status) => request(`/scans${status && status !== 'all' ? `?status=${status}` : ''}`),
-  scanPage: ({ status = 'all', page = 1, pageSize = 6 } = {}) => {
+  scanPage: ({ status = 'all', page = 1, pageSize = 6, research = null } = {}) => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (status && status !== 'all') params.set('status', status);
+    if (research) params.set('research', String(research));
     return request(`/scans?${params}`);
   },
   scan: (id) => request(`/scans/${id}`),

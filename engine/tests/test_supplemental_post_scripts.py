@@ -188,3 +188,34 @@ def test_supplemental_claim_waits_for_original_scan_work_to_finish():
     candidate_query = connection.queries[0][0]
     assert "coalesce(sm.kind, 'step') = 'step'" in candidate_query
     assert "pm.supplemental_run_id IS NULL" in candidate_query
+
+
+def test_supplemental_d4_rerun_captures_poc_artifacts():
+    # A supplemental re-run of the D4 stage must capture PoC artifacts just like the
+    # pipeline D4 does, so the regenerated PoC test files persist for review.
+    database = ProcessingDatabase()
+    processor = PostProcessor(SimpleNamespace(data_dir="/tmp", github_token=None), database)
+    captured = {}
+    payload = {
+        EXTRACTOR_HELPER_FIELD: True,
+        "stub": False,
+        "stub_explanation": "",
+        "results": [{"note": "poc reproduced"}],
+    }
+
+    def run_harness(**kwargs):
+        captured.update(kwargs)
+        return payload, {"tokens": 3}, "session-1", "abc123"
+
+    processor._run_harness_with_retries = run_harness
+
+    job = supplemental_job()
+    job["run"]["post_script_id"] = 13
+    job["scan"]["configuration"] = {
+        **job["scan"]["configuration"],
+        "v27_pipeline": {"d3": 11, "d4": 13, "d5": 16},
+    }
+
+    assert processor.process_supplemental_post_script_target(job, object(), metadata_id=78) is True
+    assert captured["kind"] == "v27_poc"
+    assert captured["poc_finding_id"] == 31
