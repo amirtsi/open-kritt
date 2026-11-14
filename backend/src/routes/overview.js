@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { assembleScans } from '../lib/repo.js';
+import { verifiedCountsByScan } from '../lib/scanLive.js';
 import { scanResearchKey } from '../lib/researchScope.js';
 
 export { scanResearchKey };
-import { verifiedCountsByScan } from '../lib/scanLive.js';
 
 const router = Router();
 

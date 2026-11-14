@@ -26,8 +26,8 @@ import { loadPreflightInputs, scanPreflight } from '../lib/scanPreflight.js';
 import { readRuntimeSettings } from '../lib/runtimeSettings.js';
 import { assertImmutableInvestigationKeys, investigationKindForScan } from '../lib/investigationKind.js';
 import { lockScanForMutation } from '../lib/scanLocks.js';
-import { selectResearchScans } from '../lib/researchScope.js';
 import { loadScanLive } from '../lib/scanLive.js';
+import { selectResearchScans } from '../lib/researchScope.js';
 import {
   createFindingExport,
   createFindingExportLimiter,
