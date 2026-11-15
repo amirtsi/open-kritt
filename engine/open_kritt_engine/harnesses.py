@@ -2244,7 +2244,10 @@ class OllamaHarness:
         ".rs": ("Rust", r"public entrypoints match `pub (async )?fn \w+`."),
         ".move": ("Move", r"entrypoints match `public( entry)? fun \w+`."),
         ".cairo": ("Cairo", r"entrypoints sit under `#\[abi\(embed_v0\)\]` or `#\[external` and match `fn \w+`."),
-        ".py": ("Python", r"handlers match `^\s*(async )?def \w+` and route decorators such as `@\w+\.(get|post|route)`."),
+        ".py": (
+            "Python",
+            r"handlers match `^\s*(async )?def \w+` and route decorators such as `@\w+\.(get|post|route)`.",
+        ),
         ".ts": ("TypeScript", r"handlers match `export (async )?function \w+` and `\.(get|post|put|delete)\(`."),
         ".js": ("JavaScript", r"handlers match `export (async )?function \w+` and `\.(get|post|put|delete)\(`."),
     }
@@ -2263,7 +2266,9 @@ class OllamaHarness:
         try:
             candidate.relative_to(root)
         except ValueError as exc:
-            raise HarnessError("Ollama requested a path outside the repository.", code="invalid_request", harness="ollama") from exc
+            raise HarnessError(
+                "Ollama requested a path outside the repository.", code="invalid_request", harness="ollama"
+            ) from exc
         return candidate
 
     @staticmethod
@@ -2357,7 +2362,9 @@ class OllamaHarness:
         if not inventory:
             return ""
         suffixes = {Path(path).suffix for path in inventory}
-        hints = [f"- {language}: {hint}" for suffix, (language, hint) in cls._language_hints.items() if suffix in suffixes]
+        hints = [
+            f"- {language}: {hint}" for suffix, (language, hint) in cls._language_hints.items() if suffix in suffixes
+        ]
         return (
             "\nRepository source files (vendored, build and test directories omitted):\n"
             + "\n".join(inventory)
@@ -2428,9 +2435,9 @@ class OllamaHarness:
             start = max(1, int(arguments.get("start_line") or 1))
             count = min(500, max(1, int(arguments.get("line_count") or 200)))
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            return "\n".join(f"{index}: {line}" for index, line in enumerate(lines[start - 1 : start - 1 + count], start))[
-                : self.max_tool_output
-            ]
+            return "\n".join(
+                f"{index}: {line}" for index, line in enumerate(lines[start - 1 : start - 1 + count], start)
+            )[: self.max_tool_output]
         if name == "list_files":
             relative = str(arguments.get("path") or ".")
             directory = self._safe_path(repo_dir, relative)
@@ -2498,7 +2505,9 @@ class OllamaHarness:
             with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:
                 body = response.read(5 * 1024 * 1024)
         except HTTPError as exc:
-            raise HarnessError(f"Ollama rejected the request with HTTP {exc.code}.", code="provider_rejected", harness="ollama") from exc
+            raise HarnessError(
+                f"Ollama rejected the request with HTTP {exc.code}.", code="provider_rejected", harness="ollama"
+            ) from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise HarnessError("The engine could not reach Ollama.", code="network_error", harness="ollama") from exc
         try:
@@ -2592,7 +2601,12 @@ class OllamaHarness:
                 candidate = self._json_candidate(content)
             except json.JSONDecodeError:
                 messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": "Invalid response. Return exactly one JSON tool action or the final schema object."})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Invalid response. Return exactly one JSON tool action or the final schema object.",
+                    }
+                )
                 continue
             tool_name = candidate.get("name")
             arguments = candidate.get("arguments")
@@ -2630,7 +2644,9 @@ class OllamaHarness:
                     note = f"Recorded {accepted} row(s); {len(recorded)} recorded in total."
                     if rejected:
                         note += " These rows were rejected, fix and record them again: " + " | ".join(rejected[:5])
-                    messages.append({"role": "user", "content": f"{note}\nContinue with one JSON action or the final object."})
+                    messages.append(
+                        {"role": "user", "content": f"{note}\nContinue with one JSON action or the final object."}
+                    )
                     continue
                 output = self._tool(repo_dir, tool_name, arguments)
                 tool_actions += 1

@@ -10,7 +10,11 @@ def test_ollama_harness_parses_text_tool_calls_and_returns_final_payload(tmp_pat
     (tmp_path / "go.mod").write_text("module github.com/example/repo\n\ngo 1.24\n", encoding="utf-8")
     replies = iter(
         [
-            {"message": {"content": '<tool_call>{"name":"read_file","arguments":{"path":"go.mod","line_count":1}}</tool_call>'}},
+            {
+                "message": {
+                    "content": '<tool_call>{"name":"read_file","arguments":{"path":"go.mod","line_count":1}}</tool_call>'
+                }
+            },
             {
                 "message": {
                     "content": json.dumps(
@@ -140,8 +144,8 @@ def test_ollama_search_falls_back_when_ripgrep_is_unavailable(tmp_path, monkeypa
 def test_ollama_harness_repairs_schema_invalid_final_output(tmp_path, monkeypatch):
     replies = iter(
         [
-            {"message": {"content": '{"results":[{"summary":"missing path"}]}' }},
-            {"message": {"content": '{"results":[{"summary":"fixed","lane_file_path":"contract.sol"}]}' }},
+            {"message": {"content": '{"results":[{"summary":"missing path"}]}'}},
+            {"message": {"content": '{"results":[{"summary":"fixed","lane_file_path":"contract.sol"}]}'}},
         ]
     )
     observed = []
@@ -351,7 +355,10 @@ def test_ollama_elides_old_tool_output_but_keeps_the_task(tmp_path, monkeypatch)
         {
             "message": {
                 "content": json.dumps(
-                    {"name": "read_file", "arguments": {"path": "src/Big.sol", "start_line": 1 + 100 * i, "line_count": 100}}
+                    {
+                        "name": "read_file",
+                        "arguments": {"path": "src/Big.sol", "start_line": 1 + 100 * i, "line_count": 100},
+                    }
                 )
             }
         }
@@ -404,13 +411,22 @@ def test_ollama_merges_recorded_rows_into_the_final_result(tmp_path, monkeypatch
         [
             _read_vault(),
             _record({"handler": "Vault.deposit", "line": 2}),
-            {"message": {"content": json.dumps({"stub": False, "stub_explanation": "", "results": [{"handler": "Vault.withdraw", "line": 3}]})}},
+            {
+                "message": {
+                    "content": json.dumps(
+                        {"stub": False, "stub_explanation": "", "results": [{"handler": "Vault.withdraw", "line": 3}]}
+                    )
+                }
+            },
         ],
     )
     result = harness.run(prompt="Map entrypoints.", schema=ROWS_SCHEMA, repo_dir=str(repo), model="qwen")
 
     assert result.payload["stub"] is False
-    assert result.payload["results"] == [{"handler": "Vault.deposit", "line": 2}, {"handler": "Vault.withdraw", "line": 3}]
+    assert result.payload["results"] == [
+        {"handler": "Vault.deposit", "line": 2},
+        {"handler": "Vault.withdraw", "line": 3},
+    ]
 
 
 def test_ollama_rejects_recorded_rows_that_violate_the_item_schema(tmp_path, monkeypatch):
@@ -441,5 +457,9 @@ def test_ollama_returns_recorded_rows_when_the_turn_budget_runs_out(tmp_path, mo
     seen = _scripted(harness, monkeypatch, replies)
     result = harness.run(prompt="Map entrypoints.", schema=ROWS_SCHEMA, repo_dir=str(repo), model="qwen")
 
-    assert result.payload == {"stub": False, "stub_explanation": "", "results": [{"handler": "Vault.deposit", "line": 2}]}
+    assert result.payload == {
+        "stub": False,
+        "stub_explanation": "",
+        "results": [{"handler": "Vault.deposit", "line": 2}],
+    }
     assert "turns left" in seen[-1]["messages"][-1]["content"]
