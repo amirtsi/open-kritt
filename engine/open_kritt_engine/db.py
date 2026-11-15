@@ -635,9 +635,7 @@ class Database:
                 "limit_kind": limit_kind,
                 "error": error,
                 "retry_count": retry_count,
-                "resume_status": (
-                    "post_processing" if current.get("status") == "post_processing" else "running"
-                ),
+                "resume_status": ("post_processing" if current.get("status") == "post_processing" else "running"),
             }
         )
         if autoscale_workers and limit_kind in {"provider_throttled", "subagent_limited"}:
